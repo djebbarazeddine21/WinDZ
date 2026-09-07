@@ -1,0 +1,228 @@
+{
+  "users": [
+    {
+      "id": "usr_admin_01",
+      "email": "azzouzdroits@gmail.com",
+      "passwordHash": "pbkdf2$10000$abf6aadd227fd8907c788bbb92a5549a$4bd46a9975ea4e8b5bdc38e1e29eaa1dc5ef07dfa8a15a92e48c1939be47382f2bbd3664e34f7e4506073f0a91713b752243b32a403ce634344d6070981f7b73",
+      "role": "admin",
+      "subscriptionTier": "pro",
+      "subscriptionBilling": "annual",
+      "subscriptionExpiresAt": "2027-09-06T23:31:37.024Z",
+      "analysesUsedThisMonth": 1,
+      "analysesLimit": 200,
+      "createdAt": "2026-01-01T00:00:00.000Z"
+    },
+    {
+      "id": "usr_demo_01",
+      "email": "vendeur.dz@windz.app",
+      "passwordHash": "pbkdf2$10000$39b786364e164f5ff5e18ba532d83062$c590cc9fda186bf8d08100bf26d23c0d0419ffef683738d75903d8ffff35367c6cffdfb334bbb3af822dd2c0caa33ee138a9b29c1fbf11090e45df18bc483105",
+      "role": "client",
+      "subscriptionTier": "pro",
+      "subscriptionBilling": "monthly",
+      "subscriptionExpiresAt": "2026-10-07T09:03:39.811Z",
+      "analysesUsedThisMonth": 0,
+      "analysesLimit": 200,
+      "createdAt": "2026-02-15T00:00:00.000Z"
+    },
+    {
+      "id": "usr_demo_02",
+      "email": "boutique.oran@gmail.com",
+      "passwordHash": "Password123",
+      "role": "client",
+      "subscriptionTier": "pro",
+      "subscriptionBilling": "annual",
+      "subscriptionExpiresAt": "2027-07-03T23:31:37.025Z",
+      "analysesUsedThisMonth": 42,
+      "analysesLimit": 200,
+      "createdAt": "2026-01-20T00:00:00.000Z"
+    }
+  ],
+  "analyses": [
+    {
+      "id": "ana_1788737579827_7ejo",
+      "userId": "usr_admin_01",
+      "userEmail": "azzouzdroits@gmail.com",
+      "productName": "Mini Hachoir Électrique sans fil 250ml",
+      "category": "Maison & Cuisine",
+      "targetPriceDZD": 2800,
+      "score": 87,
+      "verdict": "excellent",
+      "demandeEstimee": "Élevée",
+      "niveauConcurrence": "Faible",
+      "prixMin": 2300,
+      "prixMax": 3600,
+      "conseil": "Produit très attractif en Algérie. Les coûts de confirmation sont généralement bas (<15%). Privilégiez une offre de livraison offerte à partir de 2 articles pour booster le panier moyen.",
+      "accroches": [
+        "🇩🇿 La qualité supérieure à portée de main ! Commandez votre Mini Hachoir Électrique sans fil 250ml avec livraison 58 wilayas et paiement à la livraison (COD).",
+        "✨ Vous en avez marre des contrefaçons ? Découvrez l'authentique Mini Hachoir Électrique sans fil 250ml garanti satisfait ou échangé sous 48h !",
+        "🔥 Offre spéciale cette semaine en Algérie : 10% de réduction immédiate + livraison ultra-rapide chez vous !"
+      ],
+      "createdAt": "2026-09-06T23:32:59.827Z"
+    },
+    {
+      "id": "ana_demo_01",
+      "userId": "usr_demo_01",
+      "userEmail": "vendeur.dz@windz.app",
+      "productName": "Brosse Lissante Végétale Chauffante",
+      "category": "Beauté & Cosmétique",
+      "targetPriceDZD": 3900,
+      "photoUrl": "https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?w=500&auto=format&fit=crop&q=60",
+      "score": 78,
+      "verdict": "excellent",
+      "demandeEstimee": "Élevée",
+      "niveauConcurrence": "Modérée",
+      "prixMin": 3400,
+      "prixMax": 4400,
+      "conseil": "Fort potentiel sur TikTok DZ. Mettez en avant le résultat instantané avant/après en vidéo réelle, avec livraison gratuite à Alger et 400 DZD pour les autres wilayas.",
+      "accroches": [
+        "✨ Des cheveux lisses comme chez le coiffeur en 5 minutes chrono ! Paiement à la réception.",
+        "🇩🇿 Enfin disponible en Algérie : la brosse révolutionnaire qui n'abîme pas vos pointes. Livraison 58 wilayas !",
+        "Profitez de la promo spéciale -30% aujourd'hui seulement ! Satisfait ou échangé."
+      ],
+      "createdAt": "2026-09-04T23:31:37.025Z"
+    },
+    {
+      "id": "ana_demo_02",
+      "userId": "usr_demo_01",
+      "userEmail": "vendeur.dz@windz.app",
+      "productName": "Mini Enceinte Bluetooth Étanche Douche",
+      "category": "Électronique & Gadgets",
+      "targetPriceDZD": 2200,
+      "photoUrl": "https://images.unsplash.com/photo-1608043152269-423dbba4e7e1?w=500&auto=format&fit=crop&q=60",
+      "score": 41,
+      "verdict": "revoir",
+      "demandeEstimee": "Faible",
+      "niveauConcurrence": "Élevée",
+      "prixMin": 1500,
+      "prixMax": 2000,
+      "conseil": "Marché saturé sur Facebook Marketplace et Ouedkniss avec des modèles bas de gamme à moins de 1800 DZD. Le coût d'acquisition publicitaire dépassera votre marge unitaire.",
+      "accroches": [
+        "🎵 Vos musiques préférées même sous la douche ! Résiste à 100% à l'eau.",
+        "Compacte, puissante et ventouse ultra-adhésive. Commande facile en 1 clic.",
+        "Livraison rapide à domicile sur toutes les wilayas d'Algérie."
+      ],
+      "createdAt": "2026-09-01T23:31:37.025Z"
+    },
+    {
+      "id": "ana_demo_03",
+      "userId": "usr_demo_02",
+      "userEmail": "boutique.oran@gmail.com",
+      "productName": "Montre Connectée T800 Ultra Orange",
+      "category": "Accessoires & Bijoux",
+      "targetPriceDZD": 3500,
+      "photoUrl": "https://images.unsplash.com/photo-1579586337278-3befd40fd17a?w=500&auto=format&fit=crop&q=60",
+      "score": 55,
+      "verdict": "correct",
+      "demandeEstimee": "Élevée",
+      "niveauConcurrence": "Élevée",
+      "prixMin": 2600,
+      "prixMax": 3200,
+      "conseil": "Produit très demandé par les jeunes mais beaucoup de concurrence à El Eulma et Belfort. Proposez un bundle avec bracelet supplémentaire pour justifier un prix supérieur à 3000 DZD.",
+      "accroches": [
+        "⚡ Le look ultra sans vider votre portefeuille ! Appel Bluetooth & cardio.",
+        "🇩🇿 Livraison 58 Wilayas + vérification du colis avant paiement.",
+        "Promo spéciale duo : 2 montres achetées = livraison offerte partout en Algérie !"
+      ],
+      "createdAt": "2026-09-05T23:31:37.025Z"
+    }
+  ],
+  "payments": [
+    {
+      "id": "pay_1788772753415",
+      "ref": "chk_1788772753149_0ro6nw",
+      "userId": "usr_demo_01",
+      "userEmail": "vendeur.dz@windz.app",
+      "amountDZD": 3500,
+      "tier": "pro",
+      "billing": "monthly",
+      "status": "pending",
+      "chargilyCheckoutId": "01m1xjm7y138wpwnjzce4wcr0k",
+      "paymentMethod": "EDAHABIA",
+      "createdAt": "2026-09-07T09:19:13.415Z"
+    },
+    {
+      "id": "pay_1788771795082",
+      "userId": "usr_demo_01",
+      "userEmail": "vendeur.dz@windz.app",
+      "amountDZD": 4900,
+      "tier": "pro",
+      "billing": "monthly",
+      "status": "paid",
+      "chargilyCheckoutId": "ch_chk_1788771795082_9nbt",
+      "paymentMethod": "EDAHABIA",
+      "createdAt": "2026-09-07T09:03:15.082Z"
+    },
+    {
+      "id": "pay_001",
+      "userId": "usr_demo_02",
+      "userEmail": "boutique.oran@gmail.com",
+      "amountDZD": 49000,
+      "tier": "pro",
+      "billing": "annual",
+      "status": "paid",
+      "chargilyCheckoutId": "ch_checkout_9921_oran",
+      "paymentMethod": "EDAHABIA",
+      "createdAt": "2026-08-17T23:31:37.025Z"
+    },
+    {
+      "id": "pay_002",
+      "userId": "usr_demo_01",
+      "userEmail": "vendeur.dz@windz.app",
+      "amountDZD": 2500,
+      "tier": "basic",
+      "billing": "monthly",
+      "status": "paid",
+      "chargilyCheckoutId": "ch_checkout_4412_alg",
+      "paymentMethod": "CIB",
+      "createdAt": "2026-08-27T23:31:37.025Z"
+    }
+  ],
+  "settings": {
+    "platformName": "WinDZ",
+    "logoUrl": "/icon.svg",
+    "faviconUrl": "/icon.svg",
+    "announcement": "Plateforme d'évaluation IA pour le E-commerce en Algérie — Connecté à Chargily Pay",
+    "categoryProfiles": {
+      "Mode & Vêtements": {
+        "baseDemandScore": 82,
+        "avgCompetition": "Élevée",
+        "adviceTip": "Visez les tailles réelles algériennes et des vidéos de déballage portées."
+      },
+      "Beauté & Cosmétique": {
+        "baseDemandScore": 88,
+        "avgCompetition": "Modérée",
+        "adviceTip": "Fort taux de conversion avec des vidéos UGC avant/après et preuve de livraison locale."
+      },
+      "Électronique & Gadgets": {
+        "baseDemandScore": 76,
+        "avgCompetition": "Élevée",
+        "adviceTip": "Vérifiez la marge après frais d'expédition Yalidine/Kazi Tour."
+      },
+      "Maison & Cuisine": {
+        "baseDemandScore": 85,
+        "avgCompetition": "Faible",
+        "adviceTip": "Idéal pour le public féminin et familial en Algérie, excellent potentiel sur Facebook."
+      },
+      "Bébé & Enfant": {
+        "baseDemandScore": 80,
+        "avgCompetition": "Faible",
+        "adviceTip": "Les parents algériens n'hésitent pas à dépenser pour la sécurité et l'éveil."
+      },
+      "Sport & Fitness": {
+        "baseDemandScore": 70,
+        "avgCompetition": "Modérée",
+        "adviceTip": "Mettez l'accent sur le gain de temps et l'entraînement à domicile."
+      },
+      "Accessoires & Bijoux": {
+        "baseDemandScore": 75,
+        "avgCompetition": "Élevée",
+        "adviceTip": "Privilégiez les packs duo ou cadeaux pour augmenter le panier moyen."
+      },
+      "Autre": {
+        "baseDemandScore": 70,
+        "avgCompetition": "Modérée",
+        "adviceTip": "Faites un test initial avec un petit budget pub avant de commander du stock."
+      }
+    }
+  }
+}

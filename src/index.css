@@ -1,0 +1,66 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --bg-main: #0F1B1E;
+    --card-dark: #152428;
+    --card-border: #1E3338;
+    --gold: #D4A34A;
+    --gold-light: #F3E5AB;
+    --teal: #2A9D8F;
+    --teal-dark: #1F7369;
+  }
+
+  body {
+    background-color: #0F1B1E;
+    color: #F0F4F5;
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    overflow-x: hidden;
+  }
+
+  /* Arabic typography adjustments */
+  [dir="rtl"] {
+    font-family: 'Tajawal', 'Cairo', system-ui, sans-serif;
+  }
+
+  [dir="rtl"] h1,
+  [dir="rtl"] h2,
+  [dir="rtl"] h3,
+  [dir="rtl"] .font-serif {
+    font-family: 'Cairo', 'Tajawal', system-ui, sans-serif;
+  }
+
+  /* French typography styling */
+  [dir="ltr"] .font-serif {
+    font-family: 'Playfair Display', Georgia, serif;
+  }
+}
+
+/* Custom delicate scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0F1B1E;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #233a3e;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #D4A34A;
+}
+
+/* Semi circle gauge keyframes and animations */
+@keyframes pulseGlow {
+  0%, 100% { opacity: 0.7; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.02); }
+}
+
+.animate-glow {
+  animation: pulseGlow 3s infinite ease-in-out;
+}

@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0F1B1E"/>
+      <stop offset="100%" stop-color="#182c31"/>
+    </linearGradient>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F3E5AB"/>
+      <stop offset="50%" stop-color="#D4A34A"/>
+      <stop offset="100%" stop-color="#AA7A28"/>
+    </linearGradient>
+    <linearGradient id="tealGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#48CFAD"/>
+      <stop offset="100%" stop-color="#2A9D8F"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- Background rounded squircle -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)"/>
+  <rect x="12" y="12" width="488" height="488" rx="100" fill="none" stroke="url(#goldGrad)" stroke-width="4" stroke-opacity="0.4"/>
+
+  <!-- Subtle grid glow -->
+  <circle cx="256" cy="256" r="160" fill="#2A9D8F" opacity="0.08" filter="url(#glow)"/>
+
+  <!-- Evaluation Gauge Arch in background -->
+  <path d="M 136 340 A 130 130 0 0 1 376 340" fill="none" stroke="#233a3e" stroke-width="16" stroke-linecap="round"/>
+  <path d="M 136 340 A 130 130 0 0 1 330 230" fill="none" stroke="url(#tealGrad)" stroke-width="16" stroke-linecap="round"/>
+  <path d="M 330 230 A 130 130 0 0 1 376 340" fill="none" stroke="url(#goldGrad)" stroke-width="16" stroke-linecap="round"/>
+
+  <!-- Centered Iconic "W" Monogram -->
+  <path d="M 155 180 L 195 310 L 256 220 L 317 310 L 357 180" 
+        fill="none" 
+        stroke="url(#goldGrad)" 
+        stroke-width="26" 
+        stroke-linecap="round" 
+        stroke-linejoin="round"
+        filter="url(#glow)"/>
+
+  <!-- DZ Tag Badge -->
+  <rect x="206" y="340" width="100" height="36" rx="18" fill="url(#tealGrad)"/>
+  <text x="256" y="364" fill="#0F1B1E" font-family="'Plus Jakarta Sans', system-ui, sans-serif" font-weight="900" font-size="20" text-anchor="middle" letter-spacing="3">DZ</text>
+
+  <!-- Star sparkle on top right -->
+  <path d="M 365 145 Q 365 160 380 160 Q 365 160 365 175 Q 365 160 350 160 Q 365 160 365 145 Z" fill="#F3E5AB"/>
+</svg>

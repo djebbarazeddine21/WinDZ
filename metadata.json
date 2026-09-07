@@ -1,0 +1,6 @@
+{
+  "name": "WinDZ",
+  "description": "Plateforme d'évaluation IA pré-publicité pour e-commerçants algériens avec score de potentiel en temps réel, analyse de concurrence et intégration Chargily Pay.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
