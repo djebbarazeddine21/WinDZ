@@ -1,12 +1,14 @@
 import React, { useState, useRef } from 'react';
-import { Camera, Image as ImageIcon, Sparkles, Loader2, AlertCircle, ArrowUpRight, Zap, Check } from 'lucide-react';
+import { Camera, Image as ImageIcon, Sparkles, Loader2, AlertCircle, ArrowUpRight, Zap, Check, LogIn } from 'lucide-react';
 import { ProductCategory, ProductAnalysis, User } from '../types';
-import { translations, Language } from '../lib/i18n';
+import { translations, Language, getCategoryLabel } from '../lib/i18n';
+import { api } from '../lib/api';
+import { supabaseStorage } from '../lib/supabase';
 
 interface ProductFormProps {
   user: User | null;
   lang: Language;
-  onAnalysisSuccess: (analysis: ProductAnalysis) => void;
+  onAnalysisSuccess: (analysis: ProductAnalysis, remainingQuota?: number, analysesUsed?: number) => void;
   onRequestUpgrade: () => void;
   onRequestAuth: () => void;
 }
@@ -35,10 +37,12 @@ export const ProductForm: React.FC<ProductFormProps> = ({
   const [targetPriceDZD, setTargetPriceDZD] = useState('');
   const [photoUrl, setPhotoUrl] = useState<string | undefined>(undefined);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
 
   const [isLoading, setIsLoading] = useState(false);
   const [loadingStep, setLoadingStep] = useState(1);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [quotaReached, setQuotaReached] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -48,28 +52,72 @@ export const ProductForm: React.FC<ProductFormProps> = ({
   const used = user ? user.analysesUsedThisMonth : 0;
   const remaining = Math.max(0, maxLimit - used);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Helper to downscale and compress images client-side for rapid uploads and resilient storage
+  const compressImage = (file: File): Promise<string> => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const maxDimension = 1200;
+          let { width, height } = img;
+          if (width > maxDimension || height > maxDimension) {
+            if (width > height) {
+              height = Math.round((height * maxDimension) / width);
+              width = maxDimension;
+            } else {
+              width = Math.round((width * maxDimension) / height);
+              height = maxDimension;
+            }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            resolve(canvas.toDataURL('image/jpeg', 0.85));
+          } else {
+            resolve(e.target?.result as string);
+          }
+        };
+        img.onerror = () => resolve(e.target?.result as string);
+        img.src = e.target?.result as string;
+      };
+      reader.onerror = () => resolve('');
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      // Create local preview and base64
-      const reader = new FileReader();
-      reader.onload = () => {
-        const base64 = reader.result as string;
-        setPhotoPreview(base64);
-        setPhotoUrl(base64);
-      };
-      reader.readAsDataURL(file);
+      setIsUploadingPhoto(true);
+      try {
+        // 1. Instant compression: generates a high-quality data URL immediately
+        const compressedBase64 = await compressImage(file);
+        if (compressedBase64) {
+          setPhotoPreview(compressedBase64);
+          setPhotoUrl(compressedBase64);
+        }
+
+        // 2. Persist to server / Supabase Storage in background
+        const finalUrl = await supabaseStorage.uploadProductImage(file, compressedBase64);
+        if (finalUrl) {
+          setPhotoUrl(finalUrl);
+        }
+      } catch (uploadErr) {
+        console.warn('Notice upload image bucket product-photos:', uploadErr);
+      } finally {
+        setIsUploadingPhoto(false);
+      }
     }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
-
-    if (!user) {
-      onRequestAuth();
-      return;
-    }
+    setQuotaReached(false);
 
     if (!productName.trim()) {
       setErrorMessage(lang === 'ar' ? 'يرجى إدخال اسم المنتج' : 'Veuillez saisir le nom du produit');
@@ -82,65 +130,74 @@ export const ProductForm: React.FC<ProductFormProps> = ({
       return;
     }
 
-    // Check quota
-    if (user.subscriptionTier === 'none' && user.analysesUsedThisMonth >= 1) {
-      setErrorMessage(t.quotaExceeded);
-      onRequestUpgrade();
-      return;
-    }
-    if (user.subscriptionTier !== 'none' && user.analysesUsedThisMonth >= maxLimit) {
-      setErrorMessage(t.quotaExceeded);
-      onRequestUpgrade();
-      return;
-    }
-
     setIsLoading(true);
     setLoadingStep(1);
 
-    // Simulate animated loading progress steps
+    // Progressive loading indicators
     const stepInterval = setInterval(() => {
       setLoadingStep((prev) => (prev < 4 ? prev + 1 : prev));
     }, 1800);
 
     try {
-      const response = await fetch('/api/functions/v1/analyser-produit', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${localStorage.getItem('windz_token')}`,
-        },
-        body: JSON.stringify({
-          productName: productName.trim(),
-          category,
-          targetPriceDZD: priceNum,
-          photoUrl: photoUrl || undefined,
-        }),
+      // Call Supabase Edge Function directly via api.products.analyze
+      // It passes the active user session token in Authorization: Bearer <token>
+      const data = await api.products.analyze({
+        productName: productName.trim(),
+        category,
+        targetPriceDZD: priceNum,
+        photoUrl: photoUrl || undefined,
+        lang,
       });
 
       clearInterval(stepInterval);
-      const data = await response.json();
-
-      if (!response.ok) {
-        if (data.code === 'QUOTA_EXCEEDED') {
-          setErrorMessage(data.error);
-          onRequestUpgrade();
-        } else {
-          setErrorMessage(data.error || 'Erreur lors de l\'analyse.');
-        }
-        setIsLoading(false);
-        return;
-      }
-
       setIsLoading(false);
-      onAnalysisSuccess(data.analysis);
+      onAnalysisSuccess(data.analysis, data.remainingQuota, data.analysesUsed);
     } catch (err: any) {
       clearInterval(stepInterval);
       setIsLoading(false);
-      setErrorMessage(
-        lang === 'ar'
-          ? 'تعذر إتمام التحليل. لم يتم خصم أي رصيد من باقتك، يرجى المحاولة مرة أخرى.'
-          : 'L\'analyse n\'a pas pu aboutir. Aucun crédit n\'a été débité de votre forfait. Veuillez réessayer.'
-      );
+
+      const parseErrText = (e: any, fallback: string): string => {
+        if (!e) return fallback;
+        if (typeof e === 'string') return e;
+        if (typeof e.message === 'string') return e.message;
+        if (typeof e.error === 'string') return e.error;
+        if (e.error && typeof e.error.message === 'string') return e.error.message;
+        if (e.message && typeof e.message === 'object' && typeof e.message.message === 'string') return e.message.message;
+        return fallback;
+      };
+
+      if (err.code === 'QUOTA_EXCEEDED' || err.quota_atteint) {
+        setQuotaReached(true);
+        setErrorMessage(
+          parseErrText(
+            err,
+            lang === 'ar'
+              ? 'لقد استنفدت رصيدك من التحليلات لهذا الشهر. يرجى الترقية إلى باقة أعلى (Basique أو Pro) أو الانتظار حتى الشهر القادم للمتابعة.'
+              : 'Vous avez atteint votre quota d\'analyses pour ce mois. Veuillez passer à un palier supérieur (Basique ou Pro) ou attendre le mois prochain.'
+          )
+        );
+      } else if (err.code === 'UNAUTHORIZED' || err.status === 401) {
+        setQuotaReached(false);
+        // Clear message if expired/unauthorized without silently or abruptly redirecting
+        setErrorMessage(
+          parseErrText(
+            err,
+            lang === 'ar'
+              ? 'انتهت صلاحية جلسة الاتصال أو تعذر التحقق من الحساب. يرجى إعادة تسجيل الدخول لمتابعة التحليل.'
+              : 'Votre session a expiré ou le jeton de connexion n\'est plus valide. Veuillez vous reconnecter pour analyser votre produit.'
+          )
+        );
+      } else {
+        setQuotaReached(false);
+        setErrorMessage(
+          parseErrText(
+            err,
+            lang === 'ar'
+              ? 'تعذر إتمام التحليل. لم يتم خصم أي رصيد من باقتك، يرجى المحاولة مرة أخرى.'
+              : 'L\'analyse n\'a pas pu aboutir. Aucun crédit n\'a été débité de votre forfait. Veuillez réessayer.'
+          )
+        );
+      }
     }
   };
 
@@ -181,12 +238,49 @@ export const ProductForm: React.FC<ProductFormProps> = ({
           </p>
         </div>
 
-        {errorMessage && (
-          <div className="mb-5 p-3 rounded-xl bg-red-500/15 border border-red-500/30 text-red-300 text-xs flex items-start gap-2.5">
-            <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
-            <div className="flex-1">{errorMessage}</div>
+        {/* Quota reached dedicated banner */}
+        {quotaReached ? (
+          <div className="mb-6 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs sm:text-sm shadow-md animate-fade-in">
+            <div className="flex items-start gap-3">
+              <Zap className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+              <div className="flex-1 space-y-2">
+                <p className="font-bold text-white text-sm">
+                  {lang === 'ar' ? 'تم استنفاد رصيد التحليلات لهذا الشهر' : 'Quota mensuel d\'analyses atteint'}
+                </p>
+                <p className="text-slate-300 leading-relaxed text-xs">
+                  {errorMessage}
+                </p>
+                <div className="pt-2 flex flex-wrap gap-2.5 items-center">
+                  <button
+                    type="button"
+                    onClick={onRequestUpgrade}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#D4A34A] to-[#B38332] hover:from-[#E5B55E] hover:to-[#C6943F] text-slate-950 font-bold text-xs transition shadow-md cursor-pointer flex items-center gap-1.5"
+                  >
+                    <span>{lang === 'ar' ? 'الترقية إلى باقة أعلى (Basique / Pro)' : 'Passer à un palier supérieur (Basique / Pro)'}</span>
+                    <ArrowUpRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
-        )}
+        ) : errorMessage ? (
+          <div className="mb-5 p-3.5 rounded-xl bg-red-500/15 border border-red-500/30 text-red-300 text-xs flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+            <div className="flex-1 leading-relaxed">
+              <p>{errorMessage}</p>
+              {(typeof errorMessage === 'string' && (errorMessage.includes('reconnecter') || errorMessage.includes('تسجيل الدخول') || errorMessage.includes('session'))) && (
+                <button
+                  type="button"
+                  onClick={onRequestAuth}
+                  className="mt-2.5 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/25 hover:bg-red-500/35 border border-red-500/40 text-white font-semibold text-[11px] transition cursor-pointer"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span>{lang === 'ar' ? 'تسجيل الدخول' : 'Se reconnecter'}</span>
+                </button>
+              )}
+            </div>
+          </div>
+        ) : null}
 
         {isLoading ? (
           /* Animated AI Search Loading State */
@@ -239,7 +333,7 @@ export const ProductForm: React.FC<ProductFormProps> = ({
                 value={productName}
                 onChange={(e) => setProductName(e.target.value)}
                 placeholder={t.productNamePlaceholder}
-                className="w-full bg-[#0F1B1E] border border-[#233A3E] focus:border-[#D4A34A] focus:ring-1 focus:ring-[#D4A34A] rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 outline-none transition"
+                className="w-full bg-[#0F1B1E] border border-[#233A3E] focus:border-[#D4A34A] focus:ring-1 focus:ring-[#D4A34A] rounded-xl px-3.5 py-3 text-base sm:text-sm text-white placeholder-slate-500 outline-none transition"
                 required
               />
             </div>
@@ -252,11 +346,11 @@ export const ProductForm: React.FC<ProductFormProps> = ({
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value as ProductCategory)}
-                className="w-full bg-[#0F1B1E] border border-[#233A3E] focus:border-[#D4A34A] focus:ring-1 focus:ring-[#D4A34A] rounded-xl px-3.5 py-2.5 text-sm text-white outline-none transition cursor-pointer"
+                className="w-full bg-[#0F1B1E] border border-[#233A3E] focus:border-[#D4A34A] focus:ring-1 focus:ring-[#D4A34A] rounded-xl px-3.5 py-3 text-base sm:text-sm text-white outline-none transition cursor-pointer"
               >
                 {CATEGORIES.map((cat) => (
                   <option key={cat} value={cat} className="bg-[#152428] text-white">
-                    {cat}
+                    {getCategoryLabel(cat, lang)}
                   </option>
                 ))}
               </select>
@@ -270,16 +364,23 @@ export const ProductForm: React.FC<ProductFormProps> = ({
               <div className="relative">
                 <input
                   type="number"
+                  dir="ltr"
                   value={targetPriceDZD}
                   onChange={(e) => setTargetPriceDZD(e.target.value)}
                   placeholder={t.targetPricePlaceholder}
                   min="100"
                   max="500000"
                   step="50"
-                  className="w-full bg-[#0F1B1E] border border-[#233A3E] focus:border-[#D4A34A] focus:ring-1 focus:ring-[#D4A34A] rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 outline-none transition"
+                  className={`w-full bg-[#0F1B1E] border border-[#233A3E] focus:border-[#D4A34A] focus:ring-1 focus:ring-[#D4A34A] rounded-xl px-3.5 py-3 text-base sm:text-sm text-white placeholder-slate-500 outline-none transition ${
+                    lang === 'ar' ? 'pl-14' : 'pr-14'
+                  }`}
                   required
                 />
-                <span className="absolute inset-y-0 right-3 flex items-center text-xs font-bold text-slate-400 pointer-events-none">
+                <span
+                  className={`absolute inset-y-0 ${
+                    lang === 'ar' ? 'left-3.5' : 'right-3.5'
+                  } flex items-center text-xs font-bold text-[#D4A34A] pointer-events-none`}
+                >
                   {t.dzd}
                 </span>
               </div>
@@ -298,6 +399,12 @@ export const ProductForm: React.FC<ProductFormProps> = ({
                     alt="Aperçu produit"
                     className="max-h-48 w-full object-contain"
                   />
+                  {isUploadingPhoto && (
+                    <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-2 text-xs text-white">
+                      <Loader2 className="w-4 h-4 animate-spin text-[#D4A34A]" />
+                      <span>{lang === 'ar' ? 'جاري رفع الصورة...' : 'Envoi de la photo...'}</span>
+                    </div>
+                  )}
                   <button
                     type="button"
                     onClick={() => {
@@ -355,11 +462,20 @@ export const ProductForm: React.FC<ProductFormProps> = ({
             <div className="pt-2">
               <button
                 type="submit"
-                disabled={isLoading}
+                disabled={isLoading || isUploadingPhoto}
                 className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-[#D4A34A] via-[#E5B55E] to-[#AA7A28] hover:opacity-95 text-slate-950 font-bold text-sm tracking-wide shadow-lg shadow-[#D4A34A]/20 transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
               >
-                <Sparkles className="w-4 h-4 text-slate-950" />
-                {t.analyzeBtn}
+                {isUploadingPhoto ? (
+                  <>
+                    <Loader2 className="w-4 h-4 text-slate-950 animate-spin" />
+                    <span>{lang === 'ar' ? 'جاري رفع الصورة...' : 'Envoi de la photo...'}</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4 text-slate-950" />
+                    {t.analyzeBtn}
+                  </>
+                )}
               </button>
             </div>
           </form>

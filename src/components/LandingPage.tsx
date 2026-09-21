@@ -27,6 +27,7 @@ import {
   ShieldAlert,
   Search,
   FileSpreadsheet,
+  Download,
 } from 'lucide-react';
 import { translations, Language } from '../lib/i18n';
 
@@ -368,7 +369,15 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
               <div className="bg-[#152428] p-4 rounded-xl border border-[#233A3E]">
                 <span className="text-xs text-slate-400">{t.realisticPriceRange}</span>
-                <p className="text-base font-bold text-white mt-1">1 400 - 1 800 DZD</p>
+                <p className="text-base font-bold text-white mt-1">
+                  {lang === 'ar' ? (
+                    <span>
+                      من <bdi className="font-sans">1 400</bdi> إلى <bdi className="font-sans">1 800</bdi> دج
+                    </span>
+                  ) : (
+                    <span>1 400 - 1 800 DZD</span>
+                  )}
+                </p>
                 <p className="text-[11px] text-red-400 mt-1 font-semibold">
                   {lang === 'ar' ? 'خسارة مؤكدة بعد خصم تكلفة الإعلان والشحن والروتور' : 'Marge insuffisante pour absorber le coût COD & CPA'}
                 </p>
@@ -667,26 +676,27 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <p className="text-xs text-slate-400 mt-1 mb-4">
                 {lang === 'ar' ? 'للتعرف على دقة الخوارزمية بدون أي التزام' : 'Pour tester la puissance de l\'IA sans engagement'}
               </p>
-              <div className="mb-6">
-                <span className="text-3xl font-black font-serif text-white">0 DZD</span>
+              <div className="mb-6 flex items-baseline gap-1.5">
+                <span className="text-3xl font-black font-serif text-white" dir="ltr">0</span>
+                <span className="text-xs text-slate-400">{lang === 'ar' ? 'دج مجاناً' : 'DZD Gratuit'}</span>
               </div>
 
               <ul className="space-y-2.5 text-xs text-slate-300">
                 <li className="flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-[#48CFAD] shrink-0" />
-                  <span><strong>1 analyse offerte</strong> dès l'inscription</span>
+                  <span><strong>{lang === 'ar' ? 'تحليل مجاني واحد' : '1 analyse offerte'}</strong> {lang === 'ar' ? 'فور التسجيل' : 'dès l\'inscription'}</span>
                 </li>
                 <li className="flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-[#48CFAD] shrink-0" />
-                  <span>Score sur 100 et verdict</span>
+                  <span>{lang === 'ar' ? 'تقييم شامل من 100 مع القرار' : 'Score sur 100 et verdict'}</span>
                 </li>
                 <li className="flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-[#48CFAD] shrink-0" />
-                  <span>Fourchette de prix conseillée</span>
+                  <span>{lang === 'ar' ? 'تحديد مجال السعر المقترح' : 'Fourchette de prix conseillée'}</span>
                 </li>
                 <li className="flex items-center gap-2 text-slate-500">
                   <span className="w-4 h-4 text-center">✕</span>
-                  <span>Sans les accroches publicitaires</span>
+                  <span>{lang === 'ar' ? 'بدون الأفكار الإعلانية' : 'Sans les accroches publicitaires'}</span>
                 </li>
               </ul>
             </div>
@@ -711,11 +721,15 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <p className="text-xs text-slate-400 mt-1 mb-4">
                 {t.basicDesc}
               </p>
-              <div className="mb-6">
-                <span className="text-3xl font-black font-serif text-white">
-                  {billingCycle === 'monthly' ? '1 500 DZD' : '15 000 DZD'}
+              <div className="mb-6 flex items-baseline gap-1.5">
+                <span className="text-3xl font-black font-serif text-white" dir="ltr">
+                  {billingCycle === 'monthly' ? '2 500' : '25 000'}
                 </span>
-                <span className="text-xs text-slate-400"> / {billingCycle === 'monthly' ? (lang === 'ar' ? 'شهر' : 'mois') : (lang === 'ar' ? 'سنة' : 'an')}</span>
+                <span className="text-xs text-slate-400">
+                  {lang === 'ar'
+                    ? (billingCycle === 'monthly' ? 'دج / شهرياً' : 'دج / سنوياً')
+                    : (billingCycle === 'monthly' ? 'DZD / mois' : 'DZD / an')}
+                </span>
               </div>
 
               <ul className="space-y-2.5 text-xs text-slate-300">
@@ -763,25 +777,29 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <p className="text-xs text-slate-300 mt-1 mb-4">
                 {t.proDesc}
               </p>
-              <div className="mb-6">
-                <span className="text-3xl font-black font-serif text-[#D4A34A]">
-                  {billingCycle === 'monthly' ? '3 500 DZD' : '35 000 DZD'}
+              <div className="mb-6 flex items-baseline gap-1.5">
+                <span className="text-3xl font-black font-serif text-[#D4A34A]" dir="ltr">
+                  {billingCycle === 'monthly' ? '4 900' : '49 000'}
                 </span>
-                <span className="text-xs text-slate-400"> / {billingCycle === 'monthly' ? (lang === 'ar' ? 'شهر' : 'mois') : (lang === 'ar' ? 'سنة' : 'an')}</span>
+                <span className="text-xs text-slate-400">
+                  {lang === 'ar'
+                    ? (billingCycle === 'monthly' ? 'دج / شهرياً' : 'دج / سنوياً')
+                    : (billingCycle === 'monthly' ? 'DZD / mois' : 'DZD / an')}
+                </span>
               </div>
 
               <ul className="space-y-2.5 text-xs text-slate-200">
                 <li className="flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-[#D4A34A] shrink-0" />
-                  <span><strong>200 analyses IA</strong> par mois</span>
+                  <span><strong>{lang === 'ar' ? '200 تحليل شهرياً' : '200 analyses IA par mois'}</strong></span>
                 </li>
                 <li className="flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-[#D4A34A] shrink-0" />
-                  <span><strong>3 accroches publicitaires locales</strong> prêtes à copier</span>
+                  <span><strong>{lang === 'ar' ? '3 أفكار إعلانية جاهزة لكل منتج' : '3 accroches publicitaires locales'}</strong> {lang === 'ar' ? '' : 'prêtes à copier'}</span>
                 </li>
                 <li className="flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-[#D4A34A] shrink-0" />
-                  <span>Historique illimité avec export (PDF & Excel)</span>
+                  <span>{lang === 'ar' ? 'سجل تحليلات غير محدود مع التصدير (PDF & Excel)' : 'Historique illimité avec export (PDF & Excel)'}</span>
                 </li>
                 <li className="flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-[#D4A34A] shrink-0" />
@@ -878,43 +896,45 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         </div>
       </section>
 
-      {/* 8.5 INFRASTRUCTURE, MOBILE INSTALLATION & SÉCURITÉ */}
+      {/* 8.5 INFRASTRUCTURE, HAUTE PERFORMANCE & SÉCURITÉ */}
       <section className="py-8 px-4 max-w-5xl mx-auto">
         <div className="bg-gradient-to-b from-[#15272B] to-[#0F1B1E] border border-[#2A9D8F]/40 p-6 sm:p-10 rounded-3xl shadow-xl">
           <div className="text-center mb-8">
             <span className="text-xs font-bold text-[#D4A34A] uppercase tracking-wider flex items-center justify-center gap-1.5">
               <Shield className="w-3.5 h-3.5" />
-              {lang === 'ar' ? 'البنية التحتية والجاهزية التقنية' : 'Technologie, Sécurité & Mobilité'}
+              {lang === 'ar' ? 'البنية التحتية والجاهزية التقنية' : 'Technologie, Sécurité & Haute Performance'}
             </span>
             <h2 className="text-xl sm:text-3xl font-bold font-serif text-white mt-1">
-              {lang === 'ar' ? 'تطبيق ذكي وسريع، أمان بنكي وتوافق كامل' : 'Conçu pour le terrain : Mobile, Sécurisé & Référencé'}
+              {lang === 'ar' ? 'منصة فائقة السرعة، أمان بنكي وتوافق كامل' : 'Conçu pour le terrain : Ultra-Rapide, Sécurisé & Référencé'}
             </h2>
             <p className="text-xs sm:text-sm text-slate-300 mt-2 max-w-2xl mx-auto">
               {lang === 'ar'
-                ? 'منصة متوافقة 100% مع الهواتف الذكية (Android و iPhone)، بنية سحابية مشفرة، وتكامل مع بوابات الدفع الرسمية في الجزائر.'
-                : 'Une application progressive ultra-rapide sur smartphone, un chiffrement de niveau bancaire et une indexation optimale sur le marché DZ.'}
+                ? 'منصة سحابية متوافقة مع جميع الهواتف والحواسيب، بنية مشفرة، وتكامل مباشر مع بوابات الدفع الرسمية في الجزائر.'
+                : 'Une plateforme fluide et réactive sur smartphone et PC, un chiffrement de niveau bancaire et une indexation optimale sur le marché DZ.'}
             </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-            {/* Card 1: Mobile App */}
+            {/* Card 1: High Performance & Speed */}
             <div className="bg-[#122023] border border-[#233A3E] p-5 rounded-2xl flex flex-col justify-between">
               <div>
                 <div className="w-10 h-10 rounded-xl bg-[#2A9D8F]/20 text-[#48CFAD] flex items-center justify-center font-bold mb-3">
-                  <Smartphone className="w-5 h-5" />
+                  <Zap className="w-5 h-5" />
                 </div>
                 <h3 className="text-base font-bold text-white mb-2">
-                  {lang === 'ar' ? 'تطبيق جوال Android و iOS' : 'Application Mobile PWA'}
+                  {lang === 'ar' ? 'أداء فائق وسرعة استجابة' : 'Performance & Vitesse Optimale'}
                 </h3>
                 <p className="text-xs text-slate-300 leading-relaxed mb-3">
                   {lang === 'ar'
-                    ? 'تثبيت فوري بضغطة زر واحدة على هواتف أندرويد و iPhone بدون الحاجة لتنزيل أي ملف من متجر التطبيقات. واجهة شاشة كاملة فائقة السرعة.'
-                    : 'Installez WinDZ directement sur Android (Chrome) ou iPhone (Safari). Pas besoin de passer par le Play Store : accès plein écran et fluidité native.'}
+                    ? 'بنية سحابية خفيفة مصممة للعمل بكفاءة على شبكات 3G و 4G الجزائرية مع استهلاك منخفض جداً للبيانات واستجابة فورية.'
+                    : 'Architecture légère conçue pour les réseaux 3G/4G algériens, chargement instantané sans temps d\'attente et fluidité absolue sur tout écran.'}
                 </p>
               </div>
-              <div className="pt-3 border-t border-[#1E3338] text-[11px] text-[#D4A34A] font-semibold flex items-center gap-1">
-                <CheckCircle2 className="w-3.5 h-3.5 text-[#2A9D8F]" />
-                <span>{lang === 'ar' ? 'خفيف جداً وموفر لبيانات 3G/4G' : 'Économe en données 3G/4G & Hors-ligne'}</span>
+              <div className="pt-3 border-t border-[#1E3338] flex flex-col gap-2.5">
+                <div className="text-[11px] text-[#D4A34A] font-semibold flex items-center gap-1">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-[#2A9D8F]" />
+                  <span>{lang === 'ar' ? 'استجابة فورية أقل من ثانية واحدة' : 'Chargement instantané < 1s sur mobile & PC'}</span>
+                </div>
               </div>
             </div>
 

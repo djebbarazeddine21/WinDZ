@@ -74,3 +74,142 @@ export interface AuthResponse {
   user: User;
   token: string;
 }
+
+export type StyleTheme =
+  | 'gold-noir'
+  | 'emeraude-royal'
+  | 'rose-couture'
+  | 'bleu-nuit-premium'
+  | 'ivoire-elegant'
+  | 'bronze-artisan';
+
+export type SupportedCarrier =
+  | 'yalidine'
+  | 'zr_express'
+  | 'maystro'
+  | 'noest'
+  | 'guepex'
+  | 'dhd'
+  | 'areex'
+  | 'Yalidine'
+  | 'ZR Express'
+  | 'Maystro'
+  | 'NOEST'
+  | 'Guepex'
+  | 'DHD'
+  | 'Areex'
+  | '';
+
+export interface SellerCarrierSettings {
+  transporteur: SupportedCarrier;
+  transporteur_api_id: string;
+  transporteur_api_token: string;
+  transporteur_wilaya_depart?: string;
+}
+
+export interface LandingPageBenefit {
+  title: string;
+  description: string;
+  icon?: string;
+}
+
+export interface LandingPageFaqItem {
+  question: string;
+  answer: string;
+}
+
+export interface LandingPageTestimonial {
+  author: string;
+  city: string;
+  rating: number;
+  comment: string;
+  verified?: boolean;
+}
+
+export interface PublicLandingPage {
+  id: string;
+  slug: string;
+  userId: string;
+  userEmail?: string;
+  analysisId?: string;
+  analysis_id?: string;
+  productName: string;
+  nom_produit?: string;
+  category: ProductCategory;
+  categorie?: string;
+  targetPriceDZD: number;
+  price_dzd?: number;
+  originalPriceDZD?: number;
+  photoUrl?: string;
+  photo_url?: string;
+  headline: string;
+  subheadline?: string;
+  description?: string;
+  badgeKicker?: string;
+  styleTheme: StyleTheme;
+  style_theme?: StyleTheme;
+  benefits: LandingPageBenefit[];
+  features?: string[];
+  faq: LandingPageFaqItem[];
+  ctaText: string;
+  cta_text?: string;
+  guaranteeBadgeText?: string;
+  deliveryInfo?: string;
+  testimonials?: LandingPageTestimonial[];
+  sellerPhone?: string;
+  whatsapp_actif?: boolean;
+  whatsappActif?: boolean;
+  whatsapp_numero?: string;
+  whatsappNumero?: string;
+  livraison_bureau_dzd?: number;
+  livraisonBureauDzd?: number;
+  livraison_domicile_dzd?: number;
+  livraisonDomicileDzd?: number;
+  pixel_facebook_id?: string;
+  pixelFacebookId?: string;
+  pixel_tiktok_id?: string;
+  pixelTiktokId?: string;
+  viewsCount?: number;
+  views_count?: number;
+  ordersCount?: number;
+  orders_count?: number;
+  isPublished?: boolean;
+  is_published?: boolean;
+  createdAt: string;
+  created_at?: string;
+}
+
+export type OrderStatus = 'nouvelle' | 'confirmee' | 'expediee' | 'livree' | 'annulee' | 'pending' | 'confirmed' | 'shipped' | 'delivered' | 'cancelled';
+
+export interface LandingPageOrder {
+  id: string;
+  landingPageId: string;
+  landing_page_id?: string;
+  slug?: string;
+  productName?: string;
+  nom_produit?: string;
+  customerName: string;
+  nom_client?: string;
+  customerPhone: string;
+  telephone_client?: string;
+  wilayaCode?: string;
+  wilayaName?: string;
+  wilaya: string;
+  commune?: string;
+  address?: string;
+  adresse_client?: string;
+  type_livraison?: 'bureau' | 'domicile' | string;
+  typeLivraison?: 'bureau' | 'domicile' | string;
+  frais_livraison_dzd?: number;
+  montant_total_dzd?: number;
+  quantity?: number;
+  unitPriceDZD?: number;
+  deliveryFeeDZD?: number;
+  totalPriceDZD?: number;
+  prix_total?: number;
+  notes?: string;
+  status: OrderStatus;
+  statut?: OrderStatus;
+  createdAt: string;
+  created_at?: string;
+}

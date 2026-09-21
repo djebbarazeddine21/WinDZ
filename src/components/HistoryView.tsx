@@ -3,7 +3,7 @@ import { Trash2, FileText, Download, ArrowLeft, ExternalLink, AlertCircle, Shiel
 import { jsPDF } from 'jspdf';
 import { ProductAnalysis, User } from '../types';
 import { api } from '../lib/api';
-import { translations, Language } from '../lib/i18n';
+import { translations, Language, getCategoryLabel } from '../lib/i18n';
 
 interface HistoryViewProps {
   user: User | null;
@@ -128,7 +128,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   };
 
   return (
-    <div className="w-full max-w-2xl mx-auto space-y-4 pb-8">
+    <div className="w-full max-w-2xl mx-auto space-y-4 pb-8 min-w-0 max-w-full">
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-[#152428] border border-[#233A3E] p-4 rounded-2xl shadow-md">
         <div>
@@ -149,7 +149,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         </div>
 
         {/* Export actions */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <button
             onClick={exportPDF}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition cursor-pointer ${
@@ -200,7 +200,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
       {/* List */}
       {isLoading ? (
         <div className="py-12 text-center text-slate-400 text-xs">
-          Chargement de votre historique...
+          {lang === 'ar' ? 'جاري تحميل السجل الخاص بك...' : 'Chargement de votre historique...'}
         </div>
       ) : analyses.length === 0 ? (
         <div className="bg-[#152428] border border-[#233A3E] rounded-2xl p-8 text-center">
@@ -236,6 +236,10 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                     <img
                       src={item.photoUrl}
                       alt={item.productName}
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        (e.currentTarget as HTMLImageElement).src = '/icon-192.png';
+                      }}
                       className="w-12 h-12 rounded-lg object-cover bg-[#0F1B1E] shrink-0 border border-[#233A3E]"
                     />
                   ) : (
@@ -249,7 +253,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                       {item.productName}
                     </h4>
                     <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5">
-                      <span>{item.category}</span>
+                      <span>{getCategoryLabel(item.category, lang)}</span>
                       <span>•</span>
                       <span>{new Date(item.createdAt).toLocaleDateString(lang === 'ar' ? 'ar-DZ' : 'fr-FR')}</span>
                     </div>

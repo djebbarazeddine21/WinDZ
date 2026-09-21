@@ -20,6 +20,13 @@ import {
   BarChart3,
   Calendar,
   Layers,
+  Database,
+  HardDrive,
+  Server,
+  ExternalLink,
+  ShoppingBag,
+  Globe,
+  Package,
 } from 'lucide-react';
 import {
   AreaChart,
@@ -35,9 +42,10 @@ import {
   BarChart,
   Bar,
 } from 'recharts';
-import { User, ProductAnalysis, PaymentRecord, PlatformSettings } from '../types';
+import { User, ProductAnalysis, PaymentRecord, PlatformSettings, PublicLandingPage } from '../types';
 import { api } from '../lib/api';
 import { translations, Language } from '../lib/i18n';
+import { normalizePhotoUrl } from '../lib/supabase';
 
 interface AdminDashboardProps {
   currentUser: User;
@@ -55,11 +63,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onExitAdmin,
 }) => {
   const t = translations[lang];
-  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'payments' | 'settings'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'payments' | 'landings' | 'settings'>('overview');
 
   const [overview, setOverview] = useState<any>(null);
   const [users, setUsers] = useState<(User & { analysesCount: number })[]>([]);
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
+  const [landingPages, setLandingPages] = useState<PublicLandingPage[]>([]);
+  const [landingSearchQuery, setLandingSearchQuery] = useState('');
+  const [landingToDelete, setLandingToDelete] = useState<PublicLandingPage | null>(null);
+  const [isDeletingLanding, setIsDeletingLanding] = useState(false);
+  const [deleteSuccessMessage, setDeleteSuccessMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -67,6 +80,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [geminiStatus, setGeminiStatus] = useState<any>(null);
   const [isTestingGemini, setIsTestingGemini] = useState(false);
   const [geminiTestResult, setGeminiTestResult] = useState<any>(null);
+
+  // Supabase Integration status & testing
+  const [supabaseStatus, setSupabaseStatus] = useState<any>(null);
+  const [isTestingSupabase, setIsTestingSupabase] = useState(false);
+  const [supabaseTestResult, setSupabaseTestResult] = useState<any>(null);
 
   // User detail view modal
   const [selectedUserAnalyses, setSelectedUserAnalyses] = useState<{ user: User; analyses: ProductAnalysis[] } | null>(null);
@@ -86,17 +104,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const loadAdminData = async () => {
     setIsLoading(true);
     try {
-      const [ovData, usersData, paymentsData, settingsData, gemStatus] = await Promise.all([
+      const [ovData, usersData, paymentsData, settingsData, gemStatus, sbStatus, landingsData] = await Promise.all([
         api.admin.getOverview(),
         api.admin.getUsers(),
         api.admin.getPayments(),
         api.admin.getSettings(),
         api.gemini.getStatus().catch(() => null),
+        api.supabase.getStatus().catch(() => null),
+        api.admin.getLandingPages().catch(() => ({ pages: [] })),
       ]);
       setOverview(ovData);
       setUsers(usersData.users || []);
       setPayments(paymentsData.payments || []);
+      if (landingsData?.pages) {
+        setLandingPages(landingsData.pages);
+      }
       if (gemStatus) setGeminiStatus(gemStatus);
+      if (sbStatus) setSupabaseStatus(sbStatus);
       if (settingsData.settings) {
         setSettingsForm(settingsData.settings);
         onSettingsUpdated(settingsData.settings);
@@ -105,6 +129,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       console.error('Erreur chargement admin:', err);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleConfirmDeleteLanding = async () => {
+    if (!landingToDelete) return;
+    setIsDeletingLanding(true);
+    try {
+      const target = landingToDelete.id || landingToDelete.slug;
+      await api.admin.deleteLandingPage(target);
+      setLandingPages((prev) => prev.filter((p) => p.id !== landingToDelete.id && p.slug !== landingToDelete.slug));
+      setDeleteSuccessMessage(
+        lang === 'ar'
+          ? `تم حذف صفحة "${landingToDelete.productName}" وجميع طلباتها بنجاح`
+          : `La landing page "${landingToDelete.productName}" et toutes ses commandes ont été supprimées avec succès.`
+      );
+      setLandingToDelete(null);
+      setTimeout(() => setDeleteSuccessMessage(null), 5000);
+    } catch (err: any) {
+      alert(err?.message || 'Erreur lors de la suppression');
+    } finally {
+      setIsDeletingLanding(false);
     }
   };
 
@@ -118,6 +163,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setGeminiTestResult({ success: false, error: err.message || 'Échec du test' });
     } finally {
       setIsTestingGemini(false);
+    }
+  };
+
+  const handleTestSupabase = async () => {
+    setIsTestingSupabase(true);
+    setSupabaseTestResult(null);
+    try {
+      const res = await api.supabase.getStatus();
+      setSupabaseStatus(res);
+      setSupabaseTestResult({
+        success: res.connected,
+        url: res.url,
+        authStatus: res.authStatus,
+        storageStatus: res.storageStatus,
+        dbStatus: res.dbStatus,
+        buckets: res.buckets,
+      });
+    } catch (err: any) {
+      setSupabaseTestResult({ success: false, error: err.message || 'Échec du test Supabase' });
+    } finally {
+      setIsTestingSupabase(false);
     }
   };
 
@@ -261,9 +327,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       </div>
 
       {/* Main Admin Content Container */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-8 pt-6">
+      <div className="max-w-7xl mx-auto px-3 sm:px-8 pt-4 sm:pt-6 w-full max-w-full overflow-x-hidden">
         {/* Navigation Tabs */}
-        <div className="flex items-center gap-1 sm:gap-2 border-b border-[#1E3338] mb-6 overflow-x-auto pb-1">
+        <div className="flex items-center gap-1 sm:gap-2 border-b border-[#1E3338] mb-6 overflow-x-auto pb-1 no-scrollbar w-full max-w-full min-w-0">
           <button
             onClick={() => setActiveTab('overview')}
             className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition cursor-pointer whitespace-nowrap ${
@@ -298,6 +364,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           >
             <CreditCard className="w-4 h-4" />
             <span>Paiements Chargily ({payments.length})</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('landings')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition cursor-pointer whitespace-nowrap ${
+              activeTab === 'landings'
+                ? 'bg-[#152428] text-[#D4A34A] border-b-2 border-[#D4A34A]'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <Layers className="w-4 h-4" />
+            <span>{lang === 'ar' ? `صفحات الهبوط (${landingPages.length})` : `Landing Pages (${landingPages.length})`}</span>
           </button>
 
           <button
@@ -417,6 +495,63 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
                   ) : (
                     <div>❌ Erreur : {geminiTestResult.error}</div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Supabase Connection Banner */}
+            <div className="bg-[#122023] border border-emerald-500/30 p-5 rounded-2xl shadow-lg relative overflow-hidden">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div className="flex items-center gap-3.5">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-600 to-teal-800 flex items-center justify-center shrink-0 shadow-md">
+                    <Database className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-sm font-bold text-white">Projet Supabase Connecté</h4>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                        {supabaseStatus?.connected ? 'Actif & Connecté' : 'Configuré'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-300 mt-0.5">
+                      URL : <span className="font-mono text-emerald-300">https://wyvxxsrlnnlajscvqofy.supabase.co</span> • Auth, Base de données & Stockage de fichiers activés
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3 shrink-0">
+                  <button
+                    type="button"
+                    disabled={isTestingSupabase}
+                    onClick={handleTestSupabase}
+                    className="px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-xs flex items-center gap-2 transition shadow-md cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isTestingSupabase ? 'animate-spin' : ''}`} />
+                    <span>{isTestingSupabase ? 'Test en cours...' : 'Tester Supabase en direct'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {supabaseTestResult && (
+                <div className={`mt-3.5 p-3 rounded-xl border text-xs ${
+                  supabaseTestResult.success
+                    ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+                    : 'bg-red-950/40 border-red-500/40 text-red-200'
+                }`}>
+                  {supabaseTestResult.success ? (
+                    <div className="space-y-1">
+                      <div className="font-semibold flex items-center gap-2">
+                        <span>✅ Connexion réussie à Supabase ({supabaseTestResult.url})</span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-2 pt-2 border-t border-emerald-500/20 text-[11px]">
+                        <div><strong className="text-white">Authentification :</strong> {supabaseTestResult.authStatus || 'Opérationnel'}</div>
+                        <div><strong className="text-white">Stockage :</strong> {supabaseTestResult.storageStatus || 'Opérationnel'}</div>
+                        <div><strong className="text-white">Base de données :</strong> {supabaseTestResult.dbStatus || 'Connectée'}</div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div>❌ Erreur : {supabaseTestResult.error}</div>
                   )}
                 </div>
               )}
@@ -711,7 +846,161 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         )}
 
-        {/* TAB 4: PLATFORM SETTINGS */}
+        {/* TAB 4: LANDING PAGES MANAGEMENT & DELETION */}
+        {activeTab === 'landings' && (
+          <div className="space-y-6">
+            <div className="bg-[#122023] border border-[#1E3338] rounded-2xl p-5 shadow-xl">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-[#1E3338]">
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    <Layers className="w-5 h-5 text-[#D4A34A]" />
+                    <span>{lang === 'ar' ? 'إدارة وحذف صفحات الهبوط' : 'Gestion & Suppression des Landing Pages'}</span>
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-1">
+                    {lang === 'ar'
+                      ? 'قائمة بجميع صفحات الهبوط المُنشأة للاختبار أو البيع، مع إمكانية حذف أي صفحة تجريبية مع جميع طلباتها.'
+                      : 'Visualisez toutes les landing pages créées et supprimez définitivement les pages de test ainsi que leurs commandes associées.'}
+                  </p>
+                </div>
+
+                {/* Search Bar */}
+                <div className="relative w-full sm:w-auto sm:min-w-[240px]">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={landingSearchQuery}
+                    onChange={(e) => setLandingSearchQuery(e.target.value)}
+                    placeholder={lang === 'ar' ? 'بحث بالاسم، الرابط...' : 'Rechercher par nom, slug...'}
+                    className="w-full bg-[#0A1214] border border-[#233A3E] rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#D4A34A]"
+                  />
+                </div>
+              </div>
+
+              {deleteSuccessMessage && (
+                <div className="mt-4 p-3 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs flex items-center gap-2 animate-fadeIn">
+                  <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>{deleteSuccessMessage}</span>
+                </div>
+              )}
+
+              {/* Landing Pages List */}
+              {landingPages.length === 0 ? (
+                <div className="text-center py-12 text-slate-500 text-xs">
+                  <Layers className="w-10 h-10 mx-auto mb-2 opacity-30" />
+                  <p>{lang === 'ar' ? 'لا توجد صفحات هبوط منشأة حتى الآن' : 'Aucune landing page créée pour le moment.'}</p>
+                </div>
+              ) : (
+                <div className="mt-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {landingPages
+                    .filter((lp) => {
+                      if (!landingSearchQuery) return true;
+                      const q = landingSearchQuery.toLowerCase();
+                      return (
+                        (lp.productName || '').toLowerCase().includes(q) ||
+                        (lp.slug || '').toLowerCase().includes(q) ||
+                        (lp.category || '').toLowerCase().includes(q)
+                      );
+                    })
+                    .map((page) => {
+                      const photo = normalizePhotoUrl(page.photoUrl || '');
+                      const unitPrice = page.targetPriceDZD || page.price_dzd || 3500;
+                      return (
+                        <div
+                          key={page.id || page.slug}
+                          className="bg-[#0F1B1E] border border-[#1E3338] hover:border-[#D4A34A]/40 rounded-xl overflow-hidden transition flex flex-col justify-between group"
+                        >
+                          <div>
+                            {/* Image Header */}
+                            <div className="h-36 bg-[#0A1214] relative overflow-hidden">
+                              {photo ? (
+                                <img
+                                  src={photo}
+                                  alt={page.productName}
+                                  className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                                  referrerPolicy="no-referrer"
+                                  onError={(e) => {
+                                    const target = e.currentTarget;
+                                    target.onerror = null;
+                                    target.src = 'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?auto=format&fit=crop&w=800&q=80';
+                                  }}
+                                />
+                              ) : (
+                                <div className="w-full h-full flex items-center justify-center text-slate-600">
+                                  <Package className="w-10 h-10" />
+                                </div>
+                              )}
+
+                              <div className="absolute top-2 left-2 flex items-center gap-1.5 flex-wrap">
+                                <span className="px-2 py-0.5 rounded-full bg-black/70 backdrop-blur text-white text-[10px] font-bold">
+                                  {page.category || 'E-commerce'}
+                                </span>
+                              </div>
+
+                              <div className="absolute top-2 right-2 flex items-center gap-1">
+                                <span className="px-2 py-0.5 rounded-full bg-[#152428]/90 border border-[#233A3E] text-slate-200 text-[10px] font-semibold flex items-center gap-1">
+                                  <ShoppingBag className="w-3 h-3 text-[#2A9D8F]" />
+                                  <span>{page.ordersCount || 0} cmd</span>
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Details */}
+                            <div className="p-3.5 space-y-2">
+                              <div className="flex items-start justify-between gap-2">
+                                <h4 className="font-bold text-white text-sm line-clamp-1">
+                                  {page.productName}
+                                </h4>
+                                <span className="font-serif font-bold text-[#D4A34A] text-xs shrink-0">
+                                  {unitPrice.toLocaleString()} DZD
+                                </span>
+                              </div>
+
+                              <p className="text-[11px] text-slate-400 font-mono line-clamp-1">
+                                /p/{page.slug}
+                              </p>
+
+                              {page.createdAt && (
+                                <p className="text-[10px] text-slate-500">
+                                  {new Date(page.createdAt).toLocaleDateString('fr-FR', {
+                                    day: '2-digit',
+                                    month: 'short',
+                                    year: 'numeric',
+                                  })}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Action Buttons */}
+                          <div className="p-3 pt-0 border-t border-[#1E3338]/60 flex items-center justify-between gap-2">
+                            <a
+                              href={`/p/${page.slug}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-2.5 py-1.5 rounded-lg bg-[#152428] hover:bg-[#1E3338] border border-[#233A3E] text-slate-200 hover:text-white text-xs font-semibold inline-flex items-center gap-1.5 transition"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5 text-[#2A9D8F]" />
+                              <span>{lang === 'ar' ? 'معاينة' : 'Voir'}</span>
+                            </a>
+
+                            <button
+                              onClick={() => setLandingToDelete(page)}
+                              className="px-2.5 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 hover:text-rose-200 text-xs font-semibold inline-flex items-center gap-1.5 transition cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                              <span>{lang === 'ar' ? 'حذف الصفحة' : 'Supprimer'}</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* TAB 5: PLATFORM SETTINGS */}
         {activeTab === 'settings' && (
           <div className="bg-[#122023] border border-[#1E3338] rounded-2xl p-6 sm:p-8 shadow-xl max-w-3xl mx-auto">
             <div className="pb-4 border-b border-[#1E3338] mb-6">
@@ -952,6 +1241,93 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 className="px-4 py-1.5 rounded-xl bg-[#D4A34A] text-slate-950 font-bold text-xs"
               >
                 Valider
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Confirm Delete Landing Page */}
+      {landingToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md bg-[#122023] border border-rose-500/40 rounded-3xl p-6 text-white shadow-2xl space-y-4 animate-scaleUp">
+            <div className="flex items-center gap-3 pb-2 border-b border-[#1E3338]">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/20 border border-rose-500/30 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5 text-rose-400" />
+              </div>
+              <div>
+                <h3 className="font-bold text-white text-base">
+                  {lang === 'ar' ? 'تأكيد حذف صفحة الهبوط' : 'Supprimer la Landing Page'}
+                </h3>
+                <p className="text-xs text-rose-400">
+                  {lang === 'ar' ? 'إجراء نهائي لا رجعة فيه' : 'Action définitive et irréversible'}
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-[#0A1214] border border-[#1E3338] rounded-xl p-3 flex items-center gap-3">
+              {landingToDelete.photoUrl ? (
+                <img
+                  src={normalizePhotoUrl(landingToDelete.photoUrl)}
+                  alt={landingToDelete.productName}
+                  className="w-12 h-12 rounded-lg object-cover border border-[#233A3E] shrink-0"
+                  onError={(e) => {
+                    const target = e.currentTarget;
+                    target.onerror = null;
+                    target.src = 'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?auto=format&fit=crop&w=800&q=80';
+                  }}
+                />
+              ) : (
+                <div className="w-12 h-12 rounded-lg bg-[#152428] flex items-center justify-center text-slate-500 shrink-0">
+                  <Package className="w-6 h-6" />
+                </div>
+              )}
+              <div className="min-w-0 flex-1">
+                <h4 className="font-bold text-white text-sm truncate">
+                  {landingToDelete.productName}
+                </h4>
+                <p className="text-xs text-slate-400 font-mono truncate">
+                  /p/{landingToDelete.slug}
+                </p>
+                <p className="text-[11px] text-[#D4A34A] font-semibold">
+                  {landingToDelete.ordersCount || 0} {lang === 'ar' ? 'طلب مسجل' : 'commande(s) enregistrée(s)'}
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              {lang === 'ar'
+                ? `هل أنت متأكد من رغبتك في حذف صفحة "${landingToDelete.productName}"؟ سيتم حذف الصفحة ورابطها العام /p/${landingToDelete.slug} وجميع الطلبات المسجلة نهائياً.`
+                : `Êtes-vous certain de vouloir supprimer cette landing page ? L'adresse publique /p/${landingToDelete.slug} et toutes les commandes associées seront définitivement supprimées de Supabase et du serveur.`}
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#1E3338]">
+              <button
+                type="button"
+                onClick={() => setLandingToDelete(null)}
+                disabled={isDeletingLanding}
+                className="px-4 py-2 rounded-xl bg-[#152428] hover:bg-[#1E3338] border border-[#233A3E] text-slate-300 hover:text-white text-xs font-semibold transition cursor-pointer"
+              >
+                {lang === 'ar' ? 'إلغاء' : 'Annuler'}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleConfirmDeleteLanding}
+                disabled={isDeletingLanding}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {isDeletingLanding ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>{lang === 'ar' ? 'جاري الحذف...' : 'Suppression...'}</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>{lang === 'ar' ? 'تأكيد الحذف' : 'Supprimer définitivement'}</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

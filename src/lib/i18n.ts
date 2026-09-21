@@ -197,8 +197,8 @@ export const translations = {
     plansSubtitle: 'Choisissez le forfait adapté à votre rythme de test',
     twoMonthsFree: '~2 mois offerts',
     recommended: 'Recommandé',
-    chooseBasic: 'Choisir le plan Basique',
-    choosePro: 'Choisir le plan Pro',
+    chooseBasic: 'S\'abonner au plan Basique',
+    choosePro: 'S\'abonner au plan Pro',
     monthly: 'Facturation mensuelle',
     annual: 'Facturation annuelle (~2 mois offerts)',
     basicPlan: 'Basique',
@@ -448,14 +448,14 @@ export const translations = {
     plansSubtitle: 'اختر الباقة المناسبة لوتيرة اختبار منتجاتك',
     twoMonthsFree: 'شهران مجاناً',
     recommended: 'الأكثر كفاءة',
-    chooseBasic: 'اختيار الباقة الأساسية',
-    choosePro: 'اختيار الباقة برو',
+    chooseBasic: 'الاشتراك في الباقة الأساسية',
+    choosePro: 'الاشتراك في باقة برو',
     monthly: 'فاتورة شهرية',
     annual: 'فاتورة سنوية (شهران مجاناً تقريباً)',
     basicPlan: 'الأساسية',
     basicDesc: 'مثالية لتجربة منتجاتك الأولى وبدء التجارة الإلكترونية بثقة.',
-    basicPriceMonthly: '2,500 دج / شهر',
-    basicPriceAnnual: '25,000 دج / سنة',
+    basicPriceMonthly: '2 500 دج / شهرياً',
+    basicPriceAnnual: '25 000 دج / سنوياً',
     basicFeat1: '30 تحليلاً بالذكاء الاصطناعي شهرياً',
     basicFeat2: 'سجل لآخر 30 منتجاً',
     basicFeat3: 'تقدير حجم الطلب والمنافسة',
@@ -469,8 +469,8 @@ export const translations = {
     proPlan: 'برو (الاحترافية)',
     proBadge: 'الأكثر طلباً 🔥',
     proDesc: 'للبائعين النشطين والوكالات الذين يختبرون منتجات متعددة أسبوعياً.',
-    proPriceMonthly: '4,900 دج / شهر',
-    proPriceAnnual: '49,000 دج / سنة',
+    proPriceMonthly: '4 900 دج / شهرياً',
+    proPriceAnnual: '49 000 دج / سنوياً',
     proFeat1: '200 تحليل بالذكاء الاصطناعي شهرياً',
     proFeat2: 'سجل غير محدود مع إمكانية التصدير (PDF & Excel)',
     proFeat3: '3 أفكار إعلانات تسويقية لكل منتج',
@@ -504,3 +504,168 @@ export const translations = {
     rightsReserved: 'جميع الحقوق محفوظة.',
   },
 };
+
+export const categoryTranslations: Record<string, { fr: string; ar: string }> = {
+  'Mode & Vêtements': { fr: 'Mode & Vêtements', ar: 'أزياء وملابس' },
+  'Beauté & Cosmétique': { fr: 'Beauté & Cosmétique', ar: 'جمال وعناية شخصية' },
+  'Électronique & Gadgets': { fr: 'Électronique & Gadgets', ar: 'إلكترونيات وأجهزة ذكية' },
+  'Maison & Cuisine': { fr: 'Maison & Cuisine', ar: 'منزل ومطبخ' },
+  'Bébé & Enfant': { fr: 'Bébé & Enfant', ar: 'أطفال ورضّع' },
+  'Sport & Fitness': { fr: 'Sport & Fitness', ar: 'رياضة ورشاقة' },
+  'Accessoires & Bijoux': { fr: 'Accessoires & Bijoux', ar: 'إكسسوارات ومجوهرات' },
+  'Autre': { fr: 'Autre', ar: 'فئات أخرى' },
+};
+
+export const getCategoryLabel = (cat: string, lang: Language): string => {
+  if (categoryTranslations[cat]) {
+    return categoryTranslations[cat][lang];
+  }
+  return cat;
+};
+
+/**
+ * Normalise n'importe quelle valeur de niveau (Français, Arabe, Anglais, variantes)
+ * en l'un des trois paliers stricts : 'Élevée' | 'Modérée' | 'Faible'
+ */
+export const normalizeMetricLevel = (val: any): 'Élevée' | 'Modérée' | 'Faible' => {
+  if (!val || typeof val !== 'string') return 'Modérée';
+  const s = val.trim().toLowerCase();
+  
+  // Élevée / Forte / High / مرتفع / عالي
+  if (
+    s.includes('fort') ||
+    s.includes('élev') ||
+    s.includes('elev') ||
+    s.includes('high') ||
+    s.includes('مرتفع') ||
+    s.includes('عالي') ||
+    s.includes('كبير') ||
+    s === 'strong'
+  ) {
+    return 'Élevée';
+  }
+
+  // Faible / Basse / Low / منخفض / ضعيف
+  if (
+    s.includes('faibl') ||
+    s.includes('bass') ||
+    s.includes('bas') ||
+    s.includes('low') ||
+    s.includes('منخفض') ||
+    s.includes('ضعيف') ||
+    s.includes('قليل')
+  ) {
+    return 'Faible';
+  }
+
+  // Modérée / Moyenne / Medium / متوسط / معتدل
+  if (
+    s.includes('modér') ||
+    s.includes('moder') ||
+    s.includes('moyen') ||
+    s.includes('med') ||
+    s.includes('متوسط') ||
+    s.includes('معتدل')
+  ) {
+    return 'Modérée';
+  }
+
+  return 'Modérée';
+};
+
+/**
+ * Renvoie le libellé localisé exact du niveau métrique
+ */
+export const getMetricLevelLabel = (rawLevel: any, lang: Language): string => {
+  const norm = normalizeMetricLevel(rawLevel);
+  if (lang === 'ar') {
+    switch (norm) {
+      case 'Élevée':
+        return 'مرتفع';
+      case 'Modérée':
+        return 'متوسط';
+      case 'Faible':
+        return 'منخفض';
+    }
+  }
+  return norm;
+};
+
+/**
+ * Vérifie la présence de caractères arabes dans une chaîne
+ */
+export const hasArabicCharacters = (text: string | undefined): boolean => {
+  if (!text) return false;
+  return /[\u0600-\u06FF]/.test(text);
+};
+
+/**
+ * Traduction ou adaptation du conseil stratégique et des accroches en fonction de la langue active de la plateforme
+ */
+export const localizeAdviceAndHooks = (
+  analysis: {
+    conseil?: string;
+    accroches?: string[];
+    productName?: string;
+    category?: string;
+    targetPriceDZD?: number;
+    score?: number;
+  },
+  targetLang: Language
+): { conseil: string; accroches: string[] } => {
+  const rawConseil = analysis.conseil || '';
+  const rawAccroches = Array.isArray(analysis.accroches) ? analysis.accroches : [];
+  const hasAr = hasArabicCharacters(rawConseil);
+  const pName = analysis.productName || 'المنتج';
+  const price = analysis.targetPriceDZD ? `${analysis.targetPriceDZD.toLocaleString()} دج` : 'سعر تنافسي';
+
+  // Si la plateforme est en arabe et que le texte source est en français (pas de caractères arabes)
+  if (targetLang === 'ar' && !hasAr) {
+    // 1. Adapter le conseil en arabe selon le contexte e-commerce algérien
+    let arConseil = '';
+    const lowerFr = rawConseil.toLowerCase();
+
+    if (lowerFr.includes('saturé') || lowerFr.includes('concurrence')) {
+      arConseil = `سوق هذا النوع من المنتجات يشهد منافسة متزايدة على فيسبوك وإنستغرام في الجزائر. لتحقيق النجاح مع "${pName}" بسعر ${price}، لا تبع المنتج بشكل فردي عادي، بل اعرضه كـ "باقة هدايا" أو عرض مضاعف (اشترِ 1 واحصل على الثاني بنصف السعر). ركّز على إعلانات تيك توك ومقاطع فيديو واقعية (UGC) تبرز طريقة الاستخدام. احرص على تأكيد الطلبات عبر الهاتف قبل الشحن لتقليل نسبة المرتجعات ورفع نسبة التسليم مع شركة التوصيل (Yalidine أو ZR Express) إلى أكثر من 85%.`;
+    } else if (lowerFr.includes('optimisez') || lowerFr.includes('roas') || lowerFr.includes('conversion')) {
+      arConseil = `لتحقيق أفضل عائد استثمار إعلاني (ROAS) في الجزائر لمنتج "${pName}"، أطلق حملات إعلانية على فيسبوك وتيك توك موجهة نحو نموذج الطلب السريع (COD) أو رسائل واتساب. تفاوض مع المورد لضمان هامش ربح صافٍ لا يقل عن 1200 دج بعد احتساب تكلفة الإشهار ونسبة الردود، واعتمد خدمة الدفع عند الاستلام مع إمكانية المعاينة لكسب ثقة الزبون الجزائري.`;
+    } else if (lowerFr.includes('marge') || lowerFr.includes('prix')) {
+      arConseil = `استراتيجية التسعير لمنتج "${pName}": تأكد من أن سعر البيع المقترح (${price}) يغطي تكلفة التوصيل (بين 500 و 900 دج حسب الولاية) ونسبة الطرود المرتجعة المعتادة (15-20%). استخدم عروض التخفيض للكميات (مثلاً: 2 قطع بسعر تفضيلي مع توصيل مجاني) لرفع متوسط قيمة الطلب وتعويض تكلفة الإشهار.`;
+    } else {
+      arConseil = `نصيحة استراتيجية لـ "${pName}": ركّز حملاتك الإعلانية على الولايات الكبرى ذات القوة الشرائية العالية وسرعة التوصيل (الجزائر، وهران، قسنطينة، سطيف، عنابة). استخدم مقاطع فيديو قصيرة توضح حل المشكلة التي يعالجها المنتج مع التأكيد الصريح على ميزة: "التوصيل متوفر لـ 58 ولاية والدفع عند الاستلام بعد المعاينة" لزيادة معدل تحويل الزوار إلى مشترين.`;
+    }
+
+    // 2. Adapter les 3 accroches en arabe algérien persuasif
+    const arAccroches: string[] = [
+      `🔥 عرض خاص وحصري على ${pName} ! التوصيل سريع متوفر لـ 58 ولاية والدفع عند الاستلام بعد المعاينة والتأكد من الجودة 🇩🇿📦`,
+      `⭐ وداعاً للمنتجات المقلدة ! احصل الآن على ${pName} الأصلي بسعر استثنائي مع ضمان الرضا أو الاسترجاع ✨🚚`,
+      `⚡ الكمية محدودة جداً لهذا الأسبوع ! اطلب قطعتين واستفد من توصيل مجاني وهدية خاصة داخل الطرد 🎁🇩🇿`,
+    ];
+
+    return {
+      conseil: arConseil,
+      accroches: arAccroches,
+    };
+  }
+
+  // Si la plateforme est en français et que le texte source est en arabe
+  if (targetLang === 'fr' && hasAr) {
+    const frConseil = `Conseil stratégique pour "${pName}" : Configurez des campagnes publicitaires ciblées sur Facebook et TikTok Ads avec un formulaire COD simplifié. Pour maximiser votre rentabilité en Algérie au prix de ${price}, assurez-vous d'avoir une marge brute suffisante pour absorber les frais de livraison Yalidine / ZR Express (500 à 900 DZD selon la wilaya) et un taux de confirmation téléphonique supérieur à 85%. Proposez une offre pack pour augmenter le panier moyen.`;
+    const frAccroches: string[] = [
+      `🔥 Offre exclusive sur ${pName} ! Livraison rapide dans les 58 wilayas et paiement à la réception après vérification 🇩🇿📦`,
+      `⭐ Qualité supérieure garantie. Commandez maintenant et ne payez qu'une fois votre colis entre vos mains 📦✨`,
+      `⚡ Quantité très limitée cette semaine ! Profitez de la promo spéciale avant rupture de stock 🚚⚡`,
+    ];
+    return {
+      conseil: frConseil,
+      accroches: frAccroches,
+    };
+  }
+
+  // Si la langue correspond déjà
+  return {
+    conseil: rawConseil,
+    accroches: rawAccroches,
+  };
+};
+

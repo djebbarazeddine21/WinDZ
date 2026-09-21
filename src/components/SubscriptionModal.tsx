@@ -12,6 +12,7 @@ interface SubscriptionModalProps {
   lang: Language;
   onSubscriptionSuccess: (updatedUser: User) => void;
   initialTier?: 'basic' | 'pro';
+  onRequestAuth?: () => void;
 }
 
 interface ActiveCheckout {
@@ -30,6 +31,7 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
   lang,
   onSubscriptionSuccess,
   initialTier = 'pro',
+  onRequestAuth,
 }) => {
   const t = translations[lang];
   const [billing, setBilling] = useState<'monthly' | 'annual'>('monthly');
@@ -91,20 +93,88 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
 
   if (!isOpen) return null;
 
-  const basicPrice = billing === 'monthly' ? '1 500' : '15 000';
-  const proPrice = billing === 'monthly' ? '3 500' : '35 000';
+  const basicPrice = billing === 'monthly' ? '2 500' : '25 000';
+  const proPrice = billing === 'monthly' ? '4 900' : '49 000';
   const priceDisplay = selectedTier === 'basic' ? basicPrice : proPrice;
 
   const handleStartCheckout = async (tier: 'basic' | 'pro') => {
+    if (!user) {
+      setErrorMsg(
+        lang === 'ar'
+          ? 'يرجى تسجيل الدخول أو إنشاء حساب مجاني أولاً لربط اشتراكك.'
+          : 'Veuillez vous connecter ou créer un compte gratuit d\'abord pour associer votre abonnement.'
+      );
+      if (onRequestAuth) {
+        onRequestAuth();
+      }
+      return;
+    }
+
     setSelectedTier(tier);
     setIsProcessing(true);
     setErrorMsg(null);
     setVerifyStatusMsg(null);
 
+    // CRITICAL: Synchronously open a new tab directly in user click event to bypass browser popup blockers
+    let paymentWindow: Window | null = null;
+    try {
+      paymentWindow = window.open('about:blank', '_blank');
+      if (paymentWindow) {
+        paymentWindow.document.write(`
+          <!DOCTYPE html>
+          <html lang="fr">
+            <head>
+              <meta charset="utf-8">
+              <title>Chargily Pay - Redirection...</title>
+              <meta name="viewport" content="width=device-width, initial-scale=1">
+              <style>
+                body {
+                  background: #0d181a;
+                  color: #e2e8f0;
+                  font-family: system-ui, -apple-system, sans-serif;
+                  display: flex;
+                  flex-direction: column;
+                  align-items: center;
+                  justify-content: center;
+                  min-height: 100vh;
+                  margin: 0;
+                  padding: 24px;
+                  text-align: center;
+                  box-sizing: border-box;
+                }
+                .spinner {
+                  width: 50px;
+                  height: 50px;
+                  border: 4px solid #1e3338;
+                  border-top: 4px solid #d4a34a;
+                  border-radius: 50%;
+                  animation: spin 0.8s linear infinite;
+                  margin-bottom: 24px;
+                }
+                @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+                h1 { color: #f8fafc; font-size: 22px; margin: 0 0 12px; font-weight: 700; }
+                p { color: #94a3b8; font-size: 15px; margin: 0 0 20px; max-width: 440px; line-height: 1.6; }
+                .badge { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; background: rgba(42, 157, 143, 0.15); border: 1px solid rgba(42, 157, 143, 0.3); color: #2a9d8f; border-radius: 9999px; font-size: 13px; font-weight: 600; }
+              </style>
+            </head>
+            <body>
+              <div class="spinner"></div>
+              <h1>Connexion sécurisée à Chargily Pay...</h1>
+              <p>Redirection vers la passerelle de paiement officielle en Dinars Algériens (<strong>EDAHABIA / CIB</strong>).</p>
+              <div class="badge">Passerelle Officielle Algérienne 🇩🇿</div>
+            </body>
+          </html>
+        `);
+      }
+    } catch (err) {
+      console.warn('Could not pre-open window:', err);
+    }
+
     try {
       const res = await api.chargily.createCheckout(tier, billing);
-      if (res.checkoutUrl) {
-        const secureUrl = res.checkoutUrl.replace(/^http:\/\//i, 'https://');
+      const rawCheckoutUrl = res.checkout_url || res.checkoutUrl;
+      if (rawCheckoutUrl) {
+        const secureUrl = rawCheckoutUrl.replace(/^http:\/\//i, 'https://');
         
         const checkoutInfo: ActiveCheckout = {
           url: secureUrl,
@@ -117,28 +187,41 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
 
         setActiveCheckout(checkoutInfo);
 
-        // Attempt 1: Open popup in new tab
-        try {
-          const win = window.open(secureUrl, '_blank');
-          if (win) {
-            win.focus();
+        // 1. Redirect pre-opened tab immediately
+        let redirectedSuccessfully = false;
+        if (paymentWindow && !paymentWindow.closed) {
+          try {
+            paymentWindow.location.href = secureUrl;
+            redirectedSuccessfully = true;
+          } catch (e) {
+            console.warn('Failed to redirect pre-opened tab:', e);
           }
-        } catch (e) {
-          console.warn('Popup blocked:', e);
         }
 
-        // Attempt 2: If top-level navigation is available and not cross-origin restricted
-        try {
-          if (window.top && window.top !== window) {
-            window.top.location.href = secureUrl;
+        // 2. If pre-open failed, attempt standard window.open
+        if (!redirectedSuccessfully) {
+          try {
+            const fallbackWin = window.open(secureUrl, '_blank');
+            if (fallbackWin) {
+              fallbackWin.focus();
+              redirectedSuccessfully = true;
+            }
+          } catch (e) {
+            console.warn('Fallback window.open blocked:', e);
           }
-        } catch (e) {
-          // Cross-origin iframe
+        }
+
+        // 3. If running in top-level window (not an iframe), navigate directly
+        const isInsideIframe = typeof window !== 'undefined' && window.self !== window.top;
+        if (!isInsideIframe) {
+          window.location.href = secureUrl;
         }
       } else {
+        if (paymentWindow && !paymentWindow.closed) paymentWindow.close();
         throw new Error('Lien de paiement Chargily Pay non généré.');
       }
     } catch (err: any) {
+      if (paymentWindow && !paymentWindow.closed) paymentWindow.close();
       setErrorMsg(err.message || 'Impossible d\'initialiser le paiement Chargily Pay');
     } finally {
       setIsProcessing(false);
@@ -222,28 +305,40 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
             </span>
 
             <h2 className="text-2xl sm:text-3xl font-bold font-serif text-white tracking-tight mb-2">
-              Finaliser votre abonnement
+              {lang === 'ar' ? 'إتمام الاشتراك' : 'Finaliser votre abonnement'}
             </h2>
 
             <p className="text-xs sm:text-sm text-slate-300 max-w-lg mx-auto mb-6">
-              Pour protéger vos coordonnées bancaires (<strong>EDAHABIA / CIB</strong>), le paiement s'effectue sur le portail officiel de <strong>Chargily Pay</strong>.
+              {lang === 'ar' ? (
+                <span>
+                  لحماية بياناتك البنكية (<strong>الذهبية / CIB</strong>)، يتم الدفع بأمان عبر البوابة الرسمية لـ <strong>Chargily Pay</strong>.
+                </span>
+              ) : (
+                <span>
+                  Pour protéger vos coordonnées bancaires (<strong>EDAHABIA / CIB</strong>), le paiement s'effectue sur le portail officiel de <strong>Chargily Pay</strong>.
+                </span>
+              )}
             </p>
 
             {/* Recap Box */}
-            <div className="bg-[#0D181A] border border-[#233A3E] rounded-2xl p-4 max-w-md mx-auto mb-6 text-left space-y-2">
+            <div className="bg-[#0D181A] border border-[#233A3E] rounded-2xl p-4 max-w-md mx-auto mb-6 text-start space-y-2">
               <div className="flex justify-between items-center text-xs text-slate-400">
-                <span>Formule sélectionnée :</span>
+                <span>{lang === 'ar' ? 'الباقة المختارة :' : 'Formule sélectionnée :'}</span>
                 <span className="font-bold text-white uppercase">
-                  {activeCheckout.tier === 'pro' ? 'Pack PRO' : 'Pack BASIC'} ({activeCheckout.billing === 'annual' ? 'Annuel' : 'Mensuel'})
+                  {lang === 'ar'
+                    ? `${activeCheckout.tier === 'pro' ? 'باقة برو (PRO)' : 'الباقة الأساسية (BASIC)'} (${activeCheckout.billing === 'annual' ? 'سنوي' : 'شهري'})`
+                    : `${activeCheckout.tier === 'pro' ? 'Pack PRO' : 'Pack BASIC'} (${activeCheckout.billing === 'annual' ? 'Annuel' : 'Mensuel'})`}
                 </span>
               </div>
               <div className="flex justify-between items-center text-xs text-slate-400">
-                <span>Passerelle bancaire :</span>
-                <span className="text-slate-200">Chargily Pay (Algérie Poste / CIB)</span>
+                <span>{lang === 'ar' ? 'بوابة الدفع :' : 'Passerelle bancaire :'}</span>
+                <span className="text-slate-200">{lang === 'ar' ? 'شارجيلي باي (بريد الجزائر / CIB)' : 'Chargily Pay (Algérie Poste / CIB)'}</span>
               </div>
               <div className="border-t border-[#1C3034] pt-2 flex justify-between items-center text-sm font-bold text-[#D4A34A]">
-                <span>Total à payer :</span>
-                <span className="text-base">{activeCheckout.amountDZD.toLocaleString('fr-DZ')} DZD</span>
+                <span>{lang === 'ar' ? 'المبلغ المستحق :' : 'Total à payer :'}</span>
+                <span className="text-base" dir="ltr">
+                  <bdi>{activeCheckout.amountDZD.toLocaleString('fr-DZ')}</bdi> {lang === 'ar' ? 'دج' : 'DZD'}
+                </span>
               </div>
             </div>
 
@@ -261,34 +356,40 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
                 href={activeCheckout.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="w-full py-3.5 px-6 rounded-xl bg-gradient-to-r from-[#D4A34A] via-[#E5B55E] to-[#AA7A28] text-slate-950 font-extrabold text-sm shadow-lg shadow-[#D4A34A]/25 hover:opacity-95 transition flex items-center justify-center gap-2 cursor-pointer"
+                className="w-full py-4 px-6 rounded-2xl bg-gradient-to-r from-[#D4A34A] via-[#F3E5AB] to-[#D4A34A] text-slate-950 font-black text-sm sm:text-base shadow-xl shadow-[#D4A34A]/25 hover:brightness-105 active:scale-[0.99] transition flex items-center justify-center gap-2 cursor-pointer border border-[#F3E5AB]/40"
               >
-                <span>Accéder à la page de paiement Chargily Pay</span>
-                <ExternalLink className="w-4 h-4" />
+                <span>{lang === 'ar' ? '👉 فتح صفحة الدفع Chargily Pay (الذهبية / CIB)' : '👉 Ouvrir la page Chargily Pay (EDAHABIA / CIB)'}</span>
+                <ExternalLink className="w-5 h-5 text-slate-950 shrink-0" />
               </a>
+
+              <p className="text-[11px] text-slate-400 text-center">
+                {lang === 'ar'
+                  ? '💡 تم فتح نافذة الدفع. إذا تم حظرها من المتصفح، يرجى الضغط على الزر الذهبي أعلاه.'
+                  : '💡 Une fenêtre de paiement s\'est ouverte. Si votre navigateur l\'a bloquée, cliquez sur le bouton doré ci-dessus.'}
+              </p>
 
               <button
                 type="button"
                 disabled={isVerifying}
                 onClick={handleManualVerify}
-                className="w-full py-3 px-4 rounded-xl bg-[#2A9D8F] hover:bg-[#238276] text-white font-bold text-xs transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 shadow"
+                className="w-full py-3.5 px-4 rounded-xl bg-[#2A9D8F] hover:bg-[#238276] text-white font-bold text-xs transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 shadow"
               >
                 {isVerifying ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Vérification auprès de Chargily Pay...</span>
+                    <span>{lang === 'ar' ? 'جاري التحقق من نجاح الدفع مع شارجيلي...' : 'Vérification auprès de Chargily Pay...'}</span>
                   </>
                 ) : (
                   <>
                     <CheckCircle2 className="w-4 h-4" />
-                    <span>J'ai terminé mon paiement / Activer</span>
+                    <span>{lang === 'ar' ? 'أكدت الدفع بالفعل (تحقق وتفعيل الآن)' : 'J\'ai validé mon paiement (Vérifier et Activer)'}</span>
                   </>
                 )}
               </button>
 
               <div className="flex items-center justify-center gap-2 text-[11px] text-slate-400 pt-1">
                 <span className="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                <span>Détection automatique du paiement en cours...</span>
+                <span>{lang === 'ar' ? 'جاري الاستماع التلقائي لتأكيد الدفع...' : 'Détection automatique du paiement en cours...'}</span>
               </div>
 
               <button
@@ -296,7 +397,7 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
                 onClick={() => setActiveCheckout(null)}
                 className="text-xs text-slate-400 hover:text-white py-1 transition cursor-pointer"
               >
-                ← Choisir un autre forfait
+                {lang === 'ar' ? '← اختيار باقة أخرى' : '← Choisir un autre forfait'}
               </button>
             </div>
           </div>
@@ -379,9 +480,13 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
                     {lang === 'ar' ? 'للمبتدئين' : 'Démarrage'}
                   </span>
                 </div>
-                <div className="flex items-baseline gap-1 mb-4">
-                  <span className="text-3xl font-extrabold font-serif text-white">{basicPrice}</span>
-                  <span className="text-xs text-slate-400">{t.dzd} / {billing === 'monthly' ? (lang === 'ar' ? 'شهر' : 'mois') : (lang === 'ar' ? 'سنة' : 'an')}</span>
+                <div className="flex items-baseline gap-1.5 mb-4">
+                  <span className="text-3xl font-extrabold font-serif text-white" dir="ltr">{basicPrice}</span>
+                  <span className="text-xs text-slate-400">
+                    {lang === 'ar'
+                      ? (billing === 'monthly' ? 'دج / شهرياً' : 'دج / سنوياً')
+                      : (billing === 'monthly' ? 'DZD / mois' : 'DZD / an')}
+                  </span>
                 </div>
 
                 <ul className="space-y-2.5 text-xs text-slate-300 mb-6">
@@ -449,9 +554,13 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
                     {lang === 'ar' ? 'الأكثر كفاءة' : 'Recommandé'}
                   </span>
                 </div>
-                <div className="flex items-baseline gap-1 mb-4">
-                  <span className="text-3xl font-extrabold font-serif text-[#D4A34A]">{proPrice}</span>
-                  <span className="text-xs text-slate-400">{t.dzd} / {billing === 'monthly' ? (lang === 'ar' ? 'شهر' : 'mois') : (lang === 'ar' ? 'سنة' : 'an')}</span>
+                <div className="flex items-baseline gap-1.5 mb-4">
+                  <span className="text-3xl font-extrabold font-serif text-[#D4A34A]" dir="ltr">{proPrice}</span>
+                  <span className="text-xs text-slate-400">
+                    {lang === 'ar'
+                      ? (billing === 'monthly' ? 'دج / شهرياً' : 'دج / سنوياً')
+                      : (billing === 'monthly' ? 'DZD / mois' : 'DZD / an')}
+                  </span>
                 </div>
 
                 <ul className="space-y-2.5 text-xs text-slate-200 mb-6">

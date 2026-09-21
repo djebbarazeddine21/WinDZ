@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Mail, Lock, Shield, ArrowRight, Sparkles, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { X, Mail, Lock, ArrowRight, AlertCircle, CheckCircle2, Eye, EyeOff, KeyRound } from 'lucide-react';
 import { User } from '../types';
 import { api } from '../lib/api';
 import { translations, Language } from '../lib/i18n';
@@ -21,27 +21,40 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 }) => {
   const t = translations[lang];
   const [mode, setMode] = useState<'login' | 'signup'>(defaultMode);
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState('djebbarazeddine21@gmail.com');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
+    setInfoMessage(null);
     setIsLoading(true);
 
     try {
       if (mode === 'login') {
         const res = await api.auth.login(email.trim(), password);
         onAuthSuccess(res.user);
+        onClose();
       } else {
         const res = await api.auth.signup(email.trim(), password);
-        onAuthSuccess(res.user);
+        if (res.token) {
+          onAuthSuccess(res.user);
+          onClose();
+        } else {
+          setInfoMessage(
+            lang === 'ar'
+              ? 'تم إنشاء الحساب بنجاح! يرجى التحقق من بريدك الإلكتروني لتأكيد التسجيل.'
+              : 'Compte créé avec succès ! Veuillez vérifier vos e-mails pour confirmer votre compte.'
+          );
+        }
       }
-      onClose();
     } catch (err: any) {
       setErrorMessage(err.message || 'Erreur d\'authentification');
     } finally {
@@ -49,20 +62,29 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  // Quick helper to fill admin credentials
-  const fillAdminCredentials = () => {
-    setMode('login');
-    setEmail('azzouzdroits@gmail.com');
-    setPassword('Infoskikda1990');
+  const handleForgotPassword = async () => {
+    if (!email.trim()) {
+      setErrorMessage(
+        lang === 'ar'
+          ? 'يرجى إدخال بريدك الإلكتروني أولاً لإرسال رابط إعادة التعيين.'
+          : 'Veuillez saisir votre adresse email pour recevoir le lien de réinitialisation.'
+      );
+      return;
+    }
     setErrorMessage(null);
-  };
-
-  // Quick helper for test seller
-  const fillSellerCredentials = () => {
-    setMode('login');
-    setEmail('vendeur.dz@windz.app');
-    setPassword('Password123');
-    setErrorMessage(null);
+    setIsResetting(true);
+    try {
+      const res = await api.auth.resetPassword(email.trim());
+      setInfoMessage(
+        lang === 'ar'
+          ? 'تم إرسال رابط إعادة تعيين كلمة المرور إلى بريدك الإلكتروني.'
+          : res.message || 'Lien de réinitialisation envoyé à votre email.'
+      );
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Erreur lors de la réinitialisation du mot de passe');
+    } finally {
+      setIsResetting(false);
+    }
   };
 
   return (
@@ -71,7 +93,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         {/* Close Button */}
         <button
           onClick={onClose}
-          className="absolute top-4 right-4 text-slate-400 hover:text-white p-2 rounded-full hover:bg-slate-800 transition"
+          className={`absolute top-4 ${lang === 'ar' ? 'left-4' : 'right-4'} text-slate-400 hover:text-white p-2 rounded-full hover:bg-slate-800 transition`}
+          aria-label="Fermer / إغلاق"
         >
           <X className="w-5 h-5" />
         </button>
@@ -99,6 +122,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </div>
         )}
 
+        {/* Info/Success Alert */}
+        {infoMessage && (
+          <div className="mb-4 p-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>{infoMessage}</span>
+          </div>
+        )}
+
         {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -106,33 +137,54 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               {t.emailLabel}
             </label>
             <div className="relative">
-              <Mail className="w-4 h-4 absolute left-3 top-3 text-slate-500 pointer-events-none" />
+              <Mail className={`w-4 h-4 absolute top-3 text-slate-500 pointer-events-none ${lang === 'ar' ? 'right-3' : 'left-3'}`} />
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="votre-email@exemple.dz"
                 required
-                className="w-full bg-[#0F1B1E] border border-[#233A3E] focus:border-[#D4A34A] focus:ring-1 focus:ring-[#D4A34A] rounded-xl pl-9 pr-3 py-2.5 text-xs sm:text-sm text-white placeholder-slate-500 outline-none transition"
+                className={`w-full bg-[#0F1B1E] border border-[#233A3E] focus:border-[#D4A34A] focus:ring-1 focus:ring-[#D4A34A] rounded-xl ${lang === 'ar' ? 'pr-9 pl-3 text-right' : 'pl-9 pr-3 text-left'} py-2.5 text-xs sm:text-sm text-white placeholder-slate-500 outline-none transition`}
               />
             </div>
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-              {t.passwordLabel}
-            </label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-xs font-semibold text-slate-300">
+                {t.passwordLabel}
+              </label>
+              {mode === 'login' && (
+                <button
+                  type="button"
+                  onClick={handleForgotPassword}
+                  disabled={isResetting}
+                  className="text-[11px] text-[#D4A34A] hover:underline cursor-pointer flex items-center gap-1"
+                >
+                  <KeyRound className="w-3 h-3" />
+                  <span>{isResetting ? (lang === 'ar' ? 'جاري الإرسال...' : 'Envoi...') : (lang === 'ar' ? 'نسيت كلمة المرور؟' : 'Mot de passe oublié ?')}</span>
+                </button>
+              )}
+            </div>
             <div className="relative">
-              <Lock className="w-4 h-4 absolute left-3 top-3 text-slate-500 pointer-events-none" />
+              <Lock className={`w-4 h-4 absolute top-3 text-slate-500 pointer-events-none ${lang === 'ar' ? 'right-3' : 'left-3'}`} />
               <input
-                type="password"
+                type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
                 required
                 minLength={6}
-                className="w-full bg-[#0F1B1E] border border-[#233A3E] focus:border-[#D4A34A] focus:ring-1 focus:ring-[#D4A34A] rounded-xl pl-9 pr-3 py-2.5 text-xs sm:text-sm text-white placeholder-slate-500 outline-none transition"
+                className={`w-full bg-[#0F1B1E] border border-[#233A3E] focus:border-[#D4A34A] focus:ring-1 focus:ring-[#D4A34A] rounded-xl ${lang === 'ar' ? 'pr-9 pl-10 text-right' : 'pl-9 pr-10 text-left'} py-2.5 text-xs sm:text-sm text-white placeholder-slate-500 outline-none transition`}
               />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className={`absolute top-3 ${lang === 'ar' ? 'left-3' : 'right-3'} text-slate-400 hover:text-slate-200 cursor-pointer transition`}
+                title={showPassword ? 'Masquer' : 'Afficher'}
+              >
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
             </div>
           </div>
 
@@ -180,39 +232,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               </button>
             </span>
           )}
-        </div>
-
-        {/* Quick-Fill buttons for testing */}
-        <div className="mt-6 pt-4 border-t border-[#1E3338] space-y-2">
-          <div className="text-[10px] text-slate-500 text-center uppercase tracking-wider font-semibold">
-            {lang === 'ar' ? 'حسابات تجريبية سريعة' : 'Accès Rapides Démo'}
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={fillAdminCredentials}
-              className="px-2.5 py-2 rounded-xl bg-[#152428] hover:bg-[#1E3338] border border-[#D4A34A]/30 text-left transition cursor-pointer"
-            >
-              <div className="flex items-center gap-1 text-[11px] font-bold text-[#D4A34A]">
-                <Shield className="w-3 h-3" />
-                <span>Admin Principal</span>
-              </div>
-              <div className="text-[10px] text-slate-400 truncate">azzouzdroits@gmail.com</div>
-            </button>
-
-            <button
-              type="button"
-              onClick={fillSellerCredentials}
-              className="px-2.5 py-2 rounded-xl bg-[#152428] hover:bg-[#1E3338] border border-[#2A9D8F]/30 text-left transition cursor-pointer"
-            >
-              <div className="flex items-center gap-1 text-[11px] font-bold text-[#48CFAD]">
-                <Sparkles className="w-3 h-3" />
-                <span>Vendeur Démo</span>
-              </div>
-              <div className="text-[10px] text-slate-400 truncate">vendeur.dz@windz.app</div>
-            </button>
-          </div>
         </div>
       </div>
     </div>
