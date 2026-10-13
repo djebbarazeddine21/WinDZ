@@ -377,6 +377,7 @@ export const supabaseDb = {
           prix_max: analysis.prixMax,
           conseil: analysis.conseil,
           accroches: analysis.accroches,
+          grounding_sources: analysis.groundingSources || [],
           created_at: analysis.createdAt,
         },
       ]);
@@ -419,6 +420,7 @@ export const supabaseDb = {
         prixMax: row.prix_max,
         conseil: row.conseil,
         accroches: row.accroches || [],
+        groundingSources: row.grounding_sources || row.groundingSources || [],
         createdAt: row.created_at,
       }));
     } catch {

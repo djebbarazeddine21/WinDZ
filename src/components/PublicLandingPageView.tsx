@@ -42,6 +42,7 @@ import { THEME_CONFIGS, ThemeConfig, localizeLandingPage } from '../lib/landingP
 import { ALGERIAN_WILAYAS, getWilayaByCode } from '../lib/wilayas';
 import { supabase, SUPABASE_ANON_KEY } from '../lib/supabase';
 import { initFacebookPixel, initTikTokPixel, trackPurchaseEvents } from '../lib/trackingPixels';
+import { formatWhatsAppNumber, buildWhatsAppChatUrl } from '../lib/whatsapp';
 
 interface PublicLandingPageViewProps {
   page: PublicLandingPage;
@@ -300,8 +301,10 @@ export const PublicLandingPageView: React.FC<PublicLandingPageViewProps> = ({
     page.whatsappNumero ||
     initialPage.whatsapp_numero ||
     initialPage.whatsappNumero ||
+    page.sellerPhone ||
+    (initialPage as any).sellerPhone ||
     '';
-  const cleanWhatsAppNumber = rawWhatsAppNum.replace(/[^0-9]/g, '');
+  const cleanWhatsAppNumber = formatWhatsAppNumber(rawWhatsAppNum);
 
   const pageUrl = typeof window !== 'undefined'
     ? window.location.href
@@ -313,11 +316,11 @@ export const PublicLandingPageView: React.FC<PublicLandingPageViewProps> = ({
   // Prompt requested format:
   // "Bonjour, je suis intéressé(e) par {nom_du_produit} à {prix} DZD. Voici le lien de la page : {url_de_la_page}"
   const whatsappPrefilledMessage = isAr
-    ? `مرحباً، أنا مهتم بمنتج ${productName} بسعر ${displayPrice} دج. Voici le lien de la page : ${pageUrl}`
+    ? `مرحباً، أنا مهتم بمنتج ${productName} بسعر ${displayPrice} دج. رابط صفحة المنتج : ${pageUrl}`
     : `Bonjour, je suis intéressé(e) par ${productName} à ${displayPrice} DZD. Voici le lien de la page : ${pageUrl}`;
 
   const whatsappUrl = cleanWhatsAppNumber
-    ? `https://wa.me/${cleanWhatsAppNumber}?text=${encodeURIComponent(whatsappPrefilledMessage)}`
+    ? buildWhatsAppChatUrl(cleanWhatsAppNumber, whatsappPrefilledMessage)
     : '#';
 
   // Tracking Pixels IDs (Facebook Pixel & TikTok Pixel)
@@ -1039,11 +1042,12 @@ export const PublicLandingPageView: React.FC<PublicLandingPageViewProps> = ({
                 {/* WhatsApp Quick Action */}
                 <div className="pt-2">
                   <a
-                    href={`https://wa.me/213${(page.sellerPhone || '550123456').replace(/^0/, '')}?text=${encodeURIComponent(
+                    href={buildWhatsAppChatUrl(
+                      page.whatsapp_numero || (page as any).whatsappNumero || page.sellerPhone || '0550123456',
                       isAr
                         ? `السلام عليكم، لقد قمت بطلب المنتج #${orderConfirmed.id} وهو ${orderConfirmed.productName} باسم ${orderConfirmed.customerName}.`
                         : `Salam, j'ai passé la commande #${orderConfirmed.id} pour ${orderConfirmed.productName} (${orderConfirmed.customerName}).`
-                    )}`}
+                    )}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition shadow-lg"

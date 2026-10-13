@@ -4,7 +4,6 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI } from '@google/genai';
 import {
   supabaseServer,
   verifySupabaseToken,
@@ -26,8 +25,29 @@ app.use((req, res, next) => {
   next();
 });
 
+// Service Worker and Manifest explicit handling (MUST NOT be cached by browser)
+app.get('/sw.js', (req, res) => {
+  res.setHeader('Content-Type', 'application/javascript; charset=UTF-8');
+  res.setHeader('Service-Worker-Allowed', '/');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.sendFile(path.join(process.cwd(), 'public', 'sw.js'));
+});
+
+app.get('/manifest.json', (req, res) => {
+  res.setHeader('Content-Type', 'application/manifest+json; charset=UTF-8');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.sendFile(path.join(process.cwd(), 'public', 'manifest.json'));
+});
+
 // Explicit Static serving of public folder assets with cache headers
-app.use(express.static(path.join(process.cwd(), 'public'), { maxAge: '1d' }));
+app.use(express.static(path.join(process.cwd(), 'public'), {
+  maxAge: '1d',
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('sw.js') || filePath.endsWith('manifest.json')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    }
+  }
+}));
 app.use('/uploads', express.static(path.join(process.cwd(), 'public/uploads'), { maxAge: '7d' }));
 
 // Cloud fallback redirect for uploads: if container restarted and local file is missing, fetch from Supabase Storage
@@ -187,7 +207,7 @@ const defaultDB: DatabaseSchema = {
   ],
   analyses: [
     {
-      id: 'ana_demo_01',
+      id: '00000000-0000-4000-8000-000000000001',
       userId: 'usr_demo_01',
       userEmail: 'vendeur.dz@windz.app',
       productName: 'Brosse Lissante Végétale Chauffante',
@@ -209,7 +229,7 @@ const defaultDB: DatabaseSchema = {
       createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
     },
     {
-      id: 'ana_demo_02',
+      id: '00000000-0000-4000-8000-000000000002',
       userId: 'usr_demo_01',
       userEmail: 'vendeur.dz@windz.app',
       productName: 'Mini Enceinte Bluetooth Étanche Douche',
@@ -231,7 +251,7 @@ const defaultDB: DatabaseSchema = {
       createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
     },
     {
-      id: 'ana_demo_03',
+      id: '00000000-0000-4000-8000-000000000003',
       userId: 'usr_demo_02',
       userEmail: 'boutique.oran@gmail.com',
       productName: 'Montre Connectée T800 Ultra Orange',
@@ -846,444 +866,10 @@ app.post('/api/upload', async (req, res) => {
 });
 
 // ==========================================
-// EDGE FUNCTION: analyser-produit (Supabase Edge Function + Resilient Gemini Engine)
+// Note: Product analysis is handled 100% by the Supabase Edge Function:
+// https://wyvxxsrlnnlajscvqofy.supabase.co/functions/v1/analyser-produit
+// All direct Gemini API calls and internal analysis engines have been completely removed.
 // ==========================================
-
-const SUPABASE_ANALYSER_EDGE_URL = 'https://wyvxxsrlnnlajscvqofy.supabase.co/functions/v1/analyser-produit';
-
-// Server-side normalization helper for demand & competition levels
-function normalizeMetricLevelServer(val: any): 'Élevée' | 'Modérée' | 'Faible' {
-  if (!val || typeof val !== 'string') return 'Modérée';
-  const s = val.trim().toLowerCase();
-  if (
-    s.includes('fort') ||
-    s.includes('élev') ||
-    s.includes('elev') ||
-    s.includes('high') ||
-    s.includes('مرتفع') ||
-    s.includes('عالي') ||
-    s.includes('كبير') ||
-    s === 'strong'
-  ) {
-    return 'Élevée';
-  }
-  if (
-    s.includes('faibl') ||
-    s.includes('bass') ||
-    s.includes('bas') ||
-    s.includes('low') ||
-    s.includes('منخفض') ||
-    s.includes('ضعيف') ||
-    s.includes('قليل')
-  ) {
-    return 'Faible';
-  }
-  if (
-    s.includes('modér') ||
-    s.includes('moder') ||
-    s.includes('moyen') ||
-    s.includes('med') ||
-    s.includes('متوسط') ||
-    s.includes('معتدل')
-  ) {
-    return 'Modérée';
-  }
-  return 'Modérée';
-}
-
-function hasArabicServer(text: string | undefined): boolean {
-  if (!text) return false;
-  return /[\u0600-\u06FF]/.test(text);
-}
-
-// Server-side Gemini evaluation engine tailored for Algerian e-commerce (58 wilayas)
-async function generateProductAnalysisWithGemini(
-  nomProduit: string,
-  categorie: string,
-  prix: number,
-  photoUrl?: string | null,
-  lang: 'fr' | 'ar' = 'fr'
-): Promise<any> {
-  const isAr = lang === 'ar';
-
-  const prompt = isAr
-    ? `أنت المحرك الذكي لخبير التجارة الإلكترونية لمنصة WinDZ الجزائرية (سوق 2026، 58 ولاية والدفع عند الاستلام COD).
-قم بتحليل هذا المنتج بدقة لفائدة بائع تجارة إلكترونية في الجزائر:
-- اسم المنتج: "${nomProduit}"
-- الفئة: "${categorie}"
-- سعر البيع المقترح: ${prix} دج
-${photoUrl ? `- رابط صورة المنتج: ${photoUrl}` : ''}
-
-أجب حصراً بكائن JSON صالح يحتوي على الحقول التالية بالضبط باللغة العربية:
-{
-  "score": (عدد صحيح بين 25 و 92 يقيم إمكانية المبيعات والربحية),
-  "verdict": ("excellent" أو "correct" أو "revoir"),
-  "demande_estimee": ("مرتفع" أو "متوسط" أو "منخفض"),
-  "niveau_concurrence": ("مرتفع" أو "متوسط" أو "منخفض"),
-  "prix_min": (السعر الأدنى المناسب للبيع بالدينار الجزائري دج حسب السوق الجزائري),
-  "prix_max": (السعر الأقصى المناسب للبيع بالدينار الجزائري دج حسب السوق الجزائري),
-  "conseil": (نصيحة تسويقية استراتيجية دقيقة ومفصلة باللغة العربية للسوق الجزائري: تحسين الإعلانات الممولة على فيسبوك وتيك توك، التوصيل مع ياليدي أو زد آر إكسبريس لـ 58 ولاية، تحقيق هامش ربح صافٍ لا يقل عن 1200 دج بعد خصم تكلفة الإشهار ونسبة الردود والتوصيل COD),
-  "accroches": [
-    (نص إعلاني تسويقي أول جذاب جداً بالعربية يركز على التوصيل السريع لـ 58 ولاية والدفع عند الاستلام بعد المعاينة),
-    (نص إعلاني تسويقي ثانٍ يركز على الجودة والضمان لتطمين الزبون الجزائري),
-    (نص إعلاني تسويقي ثالث يخلق شعور العجلة والكمية المحدودة مع عرض خاص)
-  ]
-}`
-    : `Tu es le moteur expert d'intelligence artificielle de WinDZ, la plateforme algérienne d'analyse pré-publicité e-commerce (marché algérien 2026, 58 wilayas).
-Analyse rigoureusement ce produit pour un e-commerçant vendant en Algérie avec paiement à la livraison (COD):
-- Nom du produit: "${nomProduit}"
-- Catégorie: "${categorie}"
-- Prix de vente proposé: ${prix} DZD
-${photoUrl ? `- Photo du produit: ${photoUrl}` : ''}
-
-Réponds STRICTEMENT avec un objet JSON valide contenant exactement ces champs:
-{
-  "score": (un entier entre 25 et 92 évaluant le potentiel de vente et rentabilité),
-  "verdict": ("excellent" si score >= 70, "correct" si score entre 45 et 69, "revoir" si score < 45),
-  "demande_estimee": ("Élevée" ou "Modérée" ou "Faible"),
-  "niveau_concurrence": ("Faible" ou "Modérée" ou "Élevée"),
-  "prix_min": (prix minimum conseillé en DZD selon le marché algérien),
-  "prix_max": (prix maximum conseillé en DZD selon le marché algérien),
-  "conseil": (conseil stratégique précis, actionnable et orienté conversion en Algérie: livraison Yalidine/ZR Express 58 wilayas, marge nette, ciblage Meta Ads/TikTok, gestion des retours),
-  "accroches": [
-    (Accroche marketing 1 percutante mêlant français et dialecte algérien avec mention livraison 58 wilayas),
-    (Accroche marketing 2 mettant en avant la qualité, le test à la réception et le paiement COD),
-    (Accroche marketing 3 incitant à l'action d'achat d'impulsion avec offre limitée)
-  ]
-}`;
-
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (apiKey) {
-    const ai = new GoogleGenAI({ apiKey });
-    // Prioritize ultra-fast and resilient gemini-3.1-flash-lite, then fallback to gemini-3.8-flash
-    const models = ['gemini-3.1-flash-lite', 'gemini-3.8-flash'];
-
-    for (const model of models) {
-      try {
-        const response = await ai.models.generateContent({
-          model,
-          contents: prompt,
-          config: {
-            responseMimeType: 'application/json',
-            temperature: 0.3,
-          },
-        });
-
-        const rawJson = response.text?.trim();
-        if (rawJson) {
-          const parsed = JSON.parse(rawJson);
-          if (parsed && (parsed.score !== undefined || parsed.verdict)) {
-            parsed.demande_estimee = normalizeMetricLevelServer(parsed.demande_estimee);
-            parsed.niveau_concurrence = normalizeMetricLevelServer(parsed.niveau_concurrence);
-            return parsed;
-          }
-        }
-      } catch (e: any) {
-        console.log(`[Gemini Engine] Modèle ${model} temporairement indisponible ou en forte demande, basculement vers le modèle suivant...`);
-      }
-    }
-  }
-
-  // Resilient High-Accuracy Algorithmic Fallback for Algerian COD Market (Guarantees zero downtime)
-  console.log('[Gemini Engine] Génération via moteur algorithmique expert marché algérien 58 wilayas...');
-  const safePrice = Math.max(500, Number(prix) || 2500);
-  const minP = Math.round(safePrice * 0.85);
-  const maxP = Math.round(safePrice * 1.35);
-
-  let baseScore = 72;
-  let demande: 'Élevée' | 'Modérée' | 'Faible' = 'Élevée';
-  let concurrence: 'Faible' | 'Modérée' | 'Élevée' = 'Modérée';
-
-  const catLower = (categorie || '').toLowerCase();
-  if (catLower.includes('mode') || catLower.includes('vêtement') || catLower.includes('أزياء') || catLower.includes('ملابس')) {
-    baseScore = safePrice <= 4500 ? 78 : 62;
-    demande = 'Élevée';
-    concurrence = 'Élevée';
-  } else if (catLower.includes('beauté') || catLower.includes('cosmétique') || catLower.includes('جمال') || catLower.includes('عناية')) {
-    baseScore = safePrice <= 3800 ? 82 : 68;
-    demande = 'Élevée';
-    concurrence = 'Modérée';
-  } else if (catLower.includes('électronique') || catLower.includes('gadget') || catLower.includes('إلكترونيات') || catLower.includes('أجهزة')) {
-    baseScore = safePrice <= 6500 ? 80 : 64;
-    demande = 'Élevée';
-    concurrence = 'Modérée';
-  } else if (catLower.includes('maison') || catLower.includes('cuisine') || catLower.includes('منزل') || catLower.includes('مطبخ')) {
-    baseScore = 74;
-    demande = 'Modérée';
-    concurrence = 'Faible';
-  }
-
-  const verdict = baseScore >= 70 ? 'excellent' : baseScore >= 45 ? 'correct' : 'revoir';
-
-  const arabicConseil = `لتحقيق أفضل عائد على استثمارك الإعلاني (ROAS) في الجزائر لمنتج "${nomProduit}"، أطلق حملات إعلانية على فيسبوك وتيك توك موجهة إلى نموذج الطلب السريع (COD) أو رسائل واتساب. ننصحك بالتعاقد مع شركات توصيل موثوقة مثل Yalidine أو ZR Express لضمان نسبة تسليم تفوق 85% في الولايات الكبرى (الجزائر، وهران، قسنطينة، سطيف، عنابة). احرص على أن يضمن لك المورد هامش ربح صافياً لا يقل عن 1200 دج بعد خصم تكلفة الإشهار (CPA أقل من 500 دج) ونسبة الطرود المرتجعة المعتادة.`;
-  const frenchConseil = `Pour maximiser votre retour sur investissement publicitaire (ROAS) en Algérie sur "${nomProduit}", configurez une campagne Facebook/TikTok Ads avec objectif Prospects (Formulaire COD) ou WhatsApp. Intégrez un partenariat avec Yalidine ou ZR Express pour garantir un taux de livraison supérieur à 85% dans les grandes wilayas (Alger, Oran, Constantine, Sétif, Annaba). Négociez un tarif fournisseur permettant une marge nette d'au moins 1 200 DZD par colis livré après déduction des frais publicitaires (CPA cible < 500 DZD) et des retours.`;
-
-  const arabicAccroches = [
-    `🔥 عرض حصري على ${nomProduit} ! التوصيل سريع ومتوفر لـ 58 ولاية والدفع عند الاستلام بعد المعاينة والتأكد 🇩🇿📦`,
-    `⭐ جودة ممتازة وسعر مميز ! اطلب الآن وتأكد من منتجك قبل الدفع مع ضمان الرضا 📦✨`,
-    `⚡ الكمية محدودة جداً لهذا الأسبوع ! استفد الآن من تخفيض خاص وتوصيل سريع قبل نفاد المخزون 🇩🇿`,
-  ];
-  const frenchAccroches = [
-    `🔥 Offre exclusive sur ${nomProduit} ! Livraison rapide et sécurisée dans les 58 wilayas d'Algérie 🇩🇿📦`,
-    `⭐ Qualité supérieure garantie. Commandez maintenant et payez à la réception après vérification 📦✨`,
-    `⚡ Offre limitée cette semaine sur ${nomProduit} ! Profitez d'une réduction spéciale avant rupture de stock 🇩🇿`,
-  ];
-
-  return {
-    score: baseScore,
-    verdict,
-    demande_estimee: demande,
-    niveau_concurrence: concurrence,
-    prix_min: minP,
-    prix_max: maxP,
-    conseil: isAr ? arabicConseil : frenchConseil,
-    accroches: isAr ? arabicAccroches : frenchAccroches,
-  };
-}
-
-app.post('/api/functions/v1/analyser-produit', async (req, res) => {
-  const authHeader = req.headers['authorization'] || '';
-  const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-
-  // STRICT REQUIREMENT: Validate that the token is a genuine Supabase JWT (starts with 'ey' and has JWT segments)
-  if (!token || !token.startsWith('ey') || !token.includes('.')) {
-    console.warn('[Relay analyser-produit] Token Supabase JWT manquant ou format non-JWT:', token.substring(0, 15));
-    return res.status(401).json({
-      error: 'Jeton Supabase Auth manquant ou invalide. Veuillez vous connecter avec votre compte Supabase pour analyser ce produit.',
-    });
-  }
-
-  // Verify calling user via Supabase Auth
-  let sbUser: any = null;
-  try {
-    sbUser = await verifySupabaseToken(token);
-  } catch (err: any) {
-    console.warn('[Relay analyser-produit] Erreur vérification token Supabase:', err?.message || err);
-  }
-
-  const cleanEmail = (sbUser?.email || '').toLowerCase().trim();
-  const appMeta = sbUser?.app_metadata || {};
-  const userMeta = sbUser?.user_metadata || {};
-  const isPrimaryAdmin = cleanEmail === 'azzouzdroits@gmail.com' || cleanEmail === 'djebbarazeddine21@gmail.com';
-  const isSbAdmin =
-    isPrimaryAdmin ||
-    ['admin', 'administrator', 'superadmin', 'super_admin'].includes(appMeta.role?.toLowerCase()) ||
-    (Array.isArray(appMeta.roles) && appMeta.roles.some((r: any) => typeof r === 'string' && ['admin', 'administrator', 'superadmin', 'super_admin'].includes(r.toLowerCase()))) ||
-    appMeta.is_admin === true || appMeta.isAdmin === true || appMeta.admin === true || appMeta.claims_admin === true ||
-    ['admin', 'administrator', 'superadmin', 'super_admin'].includes(userMeta.role?.toLowerCase()) ||
-    (Array.isArray(userMeta.roles) && userMeta.roles.some((r: any) => typeof r === 'string' && ['admin', 'administrator', 'superadmin', 'super_admin'].includes(r.toLowerCase()))) ||
-    userMeta.is_admin === true || userMeta.isAdmin === true || userMeta.admin === true ||
-    (typeof sbUser?.role === 'string' && ['admin', 'administrator', 'superadmin', 'super_admin'].includes(sbUser.role.toLowerCase()));
-
-  let dbUser = db.users.find((u) => (sbUser?.id && u.id === sbUser.id) || (cleanEmail && u.email.toLowerCase() === cleanEmail));
-  if (!dbUser && sbUser && cleanEmail) {
-    const defaultLimit = isSbAdmin
-      ? 200
-      : (userMeta.subscription_tier === 'pro' || appMeta.subscription_tier === 'pro'
-          ? 200
-          : (userMeta.subscription_tier === 'basic' || appMeta.subscription_tier === 'basic' ? 30 : 1));
-    dbUser = {
-      id: sbUser.id,
-      email: cleanEmail,
-      passwordHash: 'supabase_managed',
-      role: isSbAdmin ? 'admin' : 'client',
-      subscriptionTier: isSbAdmin ? 'pro' : (userMeta.subscription_tier || appMeta.subscription_tier || 'none'),
-      subscriptionBilling: isSbAdmin ? 'annual' : undefined,
-      subscriptionExpiresAt: isSbAdmin ? '2027-09-06T23:31:37.024Z' : undefined,
-      analysesUsedThisMonth: Number(userMeta.analyses_used ?? appMeta.analyses_used) || 0,
-      analysesLimit: defaultLimit,
-      createdAt: sbUser.created_at || new Date().toISOString(),
-    };
-    db.users.push(dbUser);
-    saveDB(db);
-  } else if (dbUser && isSbAdmin) {
-    let changed = false;
-    if (dbUser.role !== 'admin') {
-      dbUser.role = 'admin';
-      changed = true;
-    }
-    if (dbUser.subscriptionTier !== 'pro') {
-      dbUser.subscriptionTier = 'pro';
-      changed = true;
-    }
-    if ((dbUser.analysesLimit || 0) < 200) {
-      dbUser.analysesLimit = 200;
-      changed = true;
-    }
-    if (changed) {
-      saveDB(db);
-    }
-  }
-
-  // Quota enforcement check: prevent exceeding limits for standard accounts
-  if (dbUser && !isSbAdmin) {
-    const limit = dbUser.analysesLimit || (dbUser.subscriptionTier === 'pro' ? 200 : dbUser.subscriptionTier === 'basic' ? 30 : 1);
-    const used = dbUser.analysesUsedThisMonth || 0;
-    if (used >= limit) {
-      return res.status(403).json({
-        error: 'Vous avez atteint votre quota d\'analyses pour ce mois. Veuillez passer à un palier supérieur (Basique ou Pro) ou attendre le mois prochain.',
-        code: 'QUOTA_EXCEEDED',
-        quota_atteint: true,
-        analyses_utilisees: used,
-        analyses_limite: limit,
-        analyses_restantes: 0,
-      });
-    }
-  }
-
-  const body = req.body || {};
-  const nom_produit = (body.nom_produit || body.productName || '').trim();
-  const categorie = body.categorie || body.category || 'autre';
-  const prix = Number(body.prix || body.targetPriceDZD) || 0;
-  const photo_url = body.photo_url || body.photoUrl || null;
-  const lang: 'fr' | 'ar' = (body.lang || body.langue || 'fr') === 'ar' ? 'ar' : 'fr';
-
-  if (!nom_produit) {
-    return res.status(400).json({ error: 'Le nom du produit est requis pour l\'analyse.' });
-  }
-
-  // Helper to persist analysis into local storage & increment usage counter
-  const finalizeAnalysisResult = (data: any) => {
-    // Ensure photo_url is always populated on the returned result object
-    const finalPhoto = photo_url || data.photo_url || data.photoUrl || null;
-    data.photo_url = finalPhoto;
-    data.photoUrl = finalPhoto;
-
-    const normDemande = normalizeMetricLevelServer(data.demande_estimee || data.demandeEstimee || 'Modérée');
-    const normConcurrence = normalizeMetricLevelServer(data.niveau_concurrence || data.niveauConcurrence || 'Modérée');
-    data.demande_estimee = normDemande;
-    data.demandeEstimee = normDemande;
-    data.niveau_concurrence = normConcurrence;
-    data.niveauConcurrence = normConcurrence;
-
-    // Guarantee language consistency: if Arabic was requested but response returned French text, provide Algerian Arabic content
-    if (lang === 'ar' && !hasArabicServer(data.conseil)) {
-      data.conseil = `لتحقيق أفضل عائد على استثمارك الإعلاني (ROAS) في الجزائر لمنتج "${nom_produit}"، أطلق حملات إعلانية على فيسبوك وتيك توك موجهة إلى نموذج الطلب السريع (COD) أو رسائل واتساب. ننصحك بالتعاقد مع شركات توصيل موثوقة مثل Yalidine أو ZR Express لضمان نسبة تسليم تفوق 85% في الولايات الكبرى (الجزائر، وهران، قسنطينة، سطيف، عنابة). احرص على أن يضمن لك المورد هامش ربح صافياً لا يقل عن 1200 دج بعد خصم تكلفة الإشهار (CPA أقل من 500 دج) ونسبة الطرود المرتجعة المعتادة.`;
-      data.accroches = [
-        `🔥 عرض حصري على ${nom_produit} ! التوصيل سريع ومتوفر لـ 58 ولاية والدفع عند الاستلام بعد المعاينة والتأكد 🇩🇿📦`,
-        `⭐ جودة ممتازة وسعر مميز ! اطلب الآن وتأكد من منتجك قبل الدفع مع ضمان الرضا 📦✨`,
-        `⚡ الكمية محدودة جداً لهذا الأسبوع ! استفد الآن من تخفيض خاص وتوصيل سريع قبل نفاد المخزون 🇩🇿`,
-      ];
-    }
-
-    if (dbUser) {
-      dbUser.analysesUsedThisMonth = (dbUser.analysesUsedThisMonth || 0) + 1;
-      const limit = isSbAdmin ? 200 : (dbUser.analysesLimit || 1);
-      const remaining = Math.max(0, limit - dbUser.analysesUsedThisMonth);
-
-      const newAnalysis: DBProductAnalysis = {
-        id: data.id || `ana_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-        userId: dbUser.id,
-        userEmail: dbUser.email,
-        productName: nom_produit,
-        category: categorie,
-        targetPriceDZD: prix,
-        photoUrl: finalPhoto || undefined,
-        score: Math.max(0, Math.min(100, Math.round(Number(data.score) || 0))),
-        verdict: data.verdict || 'correct',
-        demandeEstimee: normDemande,
-        niveauConcurrence: normConcurrence,
-        prixMin: Number(data.prix_min ?? data.prixMin ?? Math.round(prix * 0.8)),
-        prixMax: Number(data.prix_max ?? data.prixMax ?? Math.round(prix * 1.3)),
-        conseil: data.conseil || '',
-        accroches: Array.isArray(data.accroches) ? data.accroches : [],
-        createdAt: data.created_at || new Date().toISOString(),
-      };
-      db.analyses.unshift(newAnalysis);
-      saveDB(db);
-
-      data.id = newAnalysis.id;
-      data.analyses_utilisees = dbUser.analysesUsedThisMonth;
-      data.analyses_limite = limit;
-      data.analyses_restantes = remaining;
-    }
-    return data;
-  };
-
-  // 1. First priority: Attempt direct call to the Supabase Edge Function
-  let edgeData: any = null;
-  let edgeSuccess = false;
-
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 12000);
-
-    const edgeRes = await fetch(SUPABASE_ANALYSER_EDGE_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-        'apikey': SUPABASE_ANON_KEY,
-      },
-      body: JSON.stringify({
-        nom_produit,
-        categorie,
-        prix,
-        photo_url,
-        langue: lang,
-        lang,
-      }),
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-
-    const text = await edgeRes.text();
-    try {
-      edgeData = JSON.parse(text);
-    } catch {
-      edgeData = { message: text };
-    }
-
-    // Check if Supabase Edge Function succeeded and produced a valid analysis
-    if (edgeRes.ok && edgeData && (edgeData.score !== undefined || edgeData.verdict)) {
-      edgeSuccess = true;
-      return res.status(200).json(finalizeAnalysisResult(edgeData));
-    } else {
-      console.log('[Relay] Edge Function non disponible, activation du moteur d\'analyse haute disponibilité...');
-    }
-  } catch {
-    console.log('[Relay] Edge Function injoignable, passage direct au moteur haute disponibilité...');
-  }
-
-  // 2. High-Reliability Redundancy: If Supabase Edge Function hit Gemini quota limits (429) or failed, generate via server Gemini engine
-  if (!edgeSuccess) {
-    console.log('[Relay analyser-produit] Activation du moteur Gemini serveur pour délivrer l\'analyse sans interruption...');
-    try {
-      const generated = await generateProductAnalysisWithGemini(nom_produit, categorie, prix, photo_url, lang);
-
-      const score = Math.max(10, Math.min(98, Math.round(Number(generated.score) || 75)));
-      const verdict = generated.verdict || (score >= 70 ? 'excellent' : score < 45 ? 'revoir' : 'correct');
-
-      const responsePayload = {
-        score,
-        verdict,
-        demande_estimee: generated.demande_estimee || 'Élevée',
-        niveau_concurrence: generated.niveau_concurrence || 'Modérée',
-        prix_min: Number(generated.prix_min) || Math.round(prix * 0.8),
-        prix_max: Number(generated.prix_max) || Math.round(prix * 1.3),
-        conseil: generated.conseil,
-        accroches: generated.accroches,
-        photo_url,
-        nom_produit,
-        categorie,
-        prix,
-        source: 'gemini-resilient-engine',
-        created_at: new Date().toISOString(),
-      };
-
-      return res.status(200).json(finalizeAnalysisResult(responsePayload));
-    } catch (gemErr: any) {
-      console.error('[Relay] Échec complet moteur Gemini serveur:', gemErr?.message || gemErr);
-      return res.status(500).json({
-        error: 'Erreur API Gemini',
-        details:
-          edgeData?.details ||
-          gemErr?.message ||
-          'Le quota de requêtes Gemini de la fonction Edge Supabase est temporairement saturé (429 RESOURCE_EXHAUSTED).',
-      });
-    }
-  }
-});
 
 app.post('/api/user/sync-quota', authMiddleware, (req, res) => {
   const user = (req as any).user as DBUser;
@@ -2588,126 +2174,6 @@ app.get('/sitemap.xml', (req, res) => {
 </urlset>`);
 });
 
-// PWA Manifest Endpoint
-app.get('/manifest.json', (req, res) => {
-  res.setHeader('Content-Type', 'application/manifest+json');
-  res.json({
-    id: '/',
-    name: 'WinDZ — Évaluation IA E-commerce Algérie',
-    short_name: 'WinDZ',
-    description: 'Plateforme d\'évaluation IA de produits pour e-commerçants algériens avant de lancer leurs publicités.',
-    start_url: '/',
-    scope: '/',
-    display: 'standalone',
-    orientation: 'portrait-primary',
-    theme_color: '#0F1B1E',
-    background_color: '#0F1B1E',
-    lang: 'fr',
-    categories: ['business', 'shopping', 'productivity'],
-    icons: [
-      {
-        src: '/pwa-192x192.png',
-        sizes: '192x192',
-        type: 'image/png',
-        purpose: 'any',
-      },
-      {
-        src: '/pwa-512x512.png',
-        sizes: '512x512',
-        type: 'image/png',
-        purpose: 'any',
-      },
-      {
-        src: '/pwa-maskable-512x512.png',
-        sizes: '512x512',
-        type: 'image/png',
-        purpose: 'maskable',
-      },
-      {
-        src: '/apple-touch-icon.png',
-        sizes: '180x180',
-        type: 'image/png',
-        purpose: 'any',
-      },
-      {
-        src: '/icon.svg',
-        sizes: 'any',
-        type: 'image/svg+xml',
-        purpose: 'any',
-      },
-    ],
-  });
-});
-
-// Service worker endpoint (PWA Offline & Cache)
-app.get('/sw.js', (req, res) => {
-  res.setHeader('Content-Type', 'application/javascript');
-  res.send(`
-const CACHE_NAME = 'windz-cache-v3';
-const PRECACHE_ASSETS = [
-  '/',
-  '/index.html',
-  '/manifest.json',
-  '/icon.svg',
-  '/pwa-192x192.png',
-  '/pwa-512x512.png',
-  '/pwa-maskable-512x512.png',
-  '/apple-touch-icon.png'
-];
-
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_ASSETS)).catch(() => {})
-  );
-  self.skipWaiting();
-});
-
-self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.map((k) => (k !== CACHE_NAME ? caches.delete(k) : null)))
-    )
-  );
-  self.clients.claim();
-});
-
-self.addEventListener('fetch', (event) => {
-  // Pass through all API requests directly without caching
-  if (event.request.url.includes('/api/')) {
-    return;
-  }
-
-  // Network first with cache fallback for navigation
-  if (event.request.mode === 'navigate') {
-    event.respondWith(
-      fetch(event.request).catch(() => caches.match('/index.html'))
-    );
-    return;
-  }
-
-  // Stale-while-revalidate for assets
-  if (event.request.url.includes('/assets/') || PRECACHE_ASSETS.some(a => event.request.url.endsWith(a))) {
-    event.respondWith(
-      caches.match(event.request).then((cachedResponse) => {
-        const fetchPromise = fetch(event.request)
-          .then((networkResponse) => {
-            if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
-              const responseToCache = networkResponse.clone();
-              caches.open(CACHE_NAME).then((cache) => {
-                cache.put(event.request, responseToCache);
-              });
-            }
-            return networkResponse;
-          })
-          .catch(() => cachedResponse);
-        return cachedResponse || fetchPromise;
-      })
-    );
-  }
-});
-`);
-});
-
 // 404 Catch-all for API routes to prevent falling into Vite HTML SPA handler
 app.all('/api/*', (req, res) => {
   res.status(404).json({ error: `Route API introuvable : ${req.method} ${req.path}` });
@@ -2729,6 +2195,8 @@ app.use((err: any, req: Request, res: Response, next: any) => {
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
+      root: process.cwd(),
+      configFile: path.resolve(process.cwd(), 'vite.config.ts'),
       server: { middlewareMode: true, hmr: false },
       appType: 'spa',
     });

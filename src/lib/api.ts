@@ -1,4 +1,4 @@
-import { User, ProductAnalysis, PaymentRecord, PlatformSettings, ProductCategory, PublicLandingPage, LandingPageOrder, StyleTheme, SellerCarrierSettings } from '../types';
+import { User, ProductAnalysis, Verdict, PaymentRecord, PlatformSettings, ProductCategory, PublicLandingPage, LandingPageOrder, StyleTheme, SellerCarrierSettings } from '../types';
 import { Language, normalizeMetricLevel } from './i18n';
 import { generateSafeSlug, localizeLandingPage } from './landingPageThemes';
 import {
@@ -324,23 +324,34 @@ export const api = {
         }
       }
 
-      // CRITICAL CHECK: Strictly enforce that activeToken is a valid Supabase JWT and never an internal ID (like usr_admin_...)
+      // CRITICAL CHECK: Strictly enforce that activeToken is a valid Supabase JWT and never an internal ID
       if (!activeToken || !activeToken.startsWith('ey') || !activeToken.includes('.')) {
-        const authErr: any = new Error('Veuillez vous connecter avec votre compte Supabase pour analyser votre produit.');
+        const authErr: any = new Error(
+          payload.lang === 'ar'
+            ? 'يرجى تسجيل الدخول بحسابك لمتابعة تحليل المنتج.'
+            : 'Veuillez vous connecter avec votre compte Supabase pour analyser votre produit.'
+        );
         authErr.code = 'UNAUTHORIZED';
         authErr.status = 401;
         throw authErr;
       }
 
-      // 2. Prepare JSON body with exact fields required by Supabase Edge Function
-      const reqBody = {
-        nom_produit: payload.productName,
+      // 2. Prepare JSON body with exact fields required by Supabase Edge Function:
+      // nom_produit, categorie, prix, photo_url (si fournie)
+      const reqBody: Record<string, any> = {
+        nom_produit: payload.productName.trim(),
         categorie: payload.category,
         prix: Number(payload.targetPriceDZD),
-        photo_url: payload.photoUrl && payload.photoUrl.trim() ? payload.photoUrl.trim() : null,
-        langue: payload.lang || 'fr',
-        lang: payload.lang || 'fr',
       };
+
+      if (payload.photoUrl && payload.photoUrl.trim()) {
+        reqBody.photo_url = payload.photoUrl.trim();
+      }
+
+      if (payload.lang) {
+        reqBody.langue = payload.lang;
+        reqBody.lang = payload.lang;
+      }
 
       // 3. Prepare headers including apikey and Authorization Bearer token
       const headers: Record<string, string> = {
@@ -349,9 +360,9 @@ export const api = {
         'apikey': SUPABASE_ANON_KEY,
       };
 
+      // 4. Call the Supabase Edge Function directly (100% Supabase Edge Function, ZERO internal/local callers)
       const SUPABASE_FUNCTION_URL = 'https://wyvxxsrlnnlajscvqofy.supabase.co/functions/v1/analyser-produit';
 
-      // 4. Call the Supabase Edge Function directly (100% Supabase Edge Function, no internal Gemini)
       let response: Response;
       try {
         response = await fetch(SUPABASE_FUNCTION_URL, {
@@ -359,35 +370,33 @@ export const api = {
           headers,
           body: JSON.stringify(reqBody),
         });
-      } catch (directErr) {
-        console.warn('[API] Échec direct Edge Function (ex: restriction réseau), passage par relais serveur:', directErr);
-        response = await fetch('/api/functions/v1/analyser-produit', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(reqBody),
-        });
+      } catch (networkErr: any) {
+        throw new Error(
+          payload.lang === 'ar'
+            ? 'تعذر الاتصال بخدمة تحليل المنتج (Supabase Edge Function). يرجى التحقق من اتصالك بالإنترنت والمحاولة مجدداً.'
+            : "Impossible de joindre le service d'analyse (Supabase Edge Function). Veuillez vérifier votre connexion internet."
+        );
       }
 
-      // 5. If 401 Unauthorized, attempt automatic session refresh and a single retry
+      // 5. If 401 Unauthorized, attempt automatic session refresh and a single retry directly with the Edge Function
       if (response.status === 401) {
-        console.warn('[API] 401 reçu de l\'Edge Function Supabase. Tentative de rafraîchissement du jeton...');
+        console.warn("[API] 401 reçu de l'Edge Function Supabase. Tentative de rafraîchissement du jeton...");
         const refreshedToken = await refreshSupabaseSession();
-        if (refreshedToken) {
+        if (refreshedToken && refreshedToken.startsWith('ey')) {
           activeToken = refreshedToken;
           headers['Authorization'] = `Bearer ${refreshedToken}`;
-          console.log('[API] Réessai immédiat de l\'analyse avec le nouveau jeton Supabase...');
           try {
             response = await fetch(SUPABASE_FUNCTION_URL, {
               method: 'POST',
               headers,
               body: JSON.stringify(reqBody),
             });
-          } catch {
-            response = await fetch('/api/functions/v1/analyser-produit', {
-              method: 'POST',
-              headers,
-              body: JSON.stringify(reqBody),
-            });
+          } catch (retryErr: any) {
+            throw new Error(
+              payload.lang === 'ar'
+                ? 'تعذر الاتصال بخدمة التحليل بعد تجديد الجلسة.'
+                : "Impossible de joindre le service d'analyse après rafraîchissement de la session."
+            );
           }
         }
       }
@@ -420,45 +429,19 @@ export const api = {
         return fallback;
       };
 
-      // 6. If response failed or didn't contain an analysis, fallback immediately to resilient server relay
-      const isAnalysisValid = data && typeof data === 'object' && (data.score !== undefined || data.verdict);
-      if (!response.ok || !isAnalysisValid) {
-        if (response.status !== 401 && response.status !== 403) {
-          console.warn('[API] Edge Function indisponible ou erreur rencontrée. Basculement vers le relais haute résilience...');
-          try {
-            const relayResponse = await fetch('/api/functions/v1/analyser-produit', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${activeToken}`,
-                'apikey': SUPABASE_ANON_KEY,
-              },
-              body: JSON.stringify(reqBody),
-            });
-
-            if (relayResponse.ok) {
-              const relayRawText = await relayResponse.text();
-              try {
-                const relayData = JSON.parse(relayRawText);
-                if (relayData && (relayData.score !== undefined || relayData.verdict)) {
-                  data = relayData;
-                  response = relayResponse;
-                }
-              } catch {
-                // Keep original data
-              }
-            }
-          } catch (relayErr) {
-            console.warn('[API] Échec du relais de secours:', relayErr);
-          }
-        }
-      }
-
       // Check if response indicates user quota reached
-      if (data && (data.quota_atteint === true || data.quota_atteint === 'true' || data.code === 'QUOTA_EXCEEDED')) {
+      if (
+        data &&
+        (data.quota_atteint === true ||
+          data.quota_atteint === 'true' ||
+          data.code === 'QUOTA_EXCEEDED' ||
+          (response.status === 403 && data.analyses_restantes === 0))
+      ) {
         const quotaMsg = extractErrorMessage(
           data,
-          'Vous avez atteint votre quota d\'analyses pour ce mois. Veuillez passer à un palier supérieur ou attendre le mois prochain.'
+          payload.lang === 'ar'
+            ? 'لقد استنفدت رصيدك من التحليلات لهذا الشهر. يرجى الترقية إلى باقة أعلى أو الانتظار حتى الشهر القادم.'
+            : "Vous avez atteint votre quota d'analyses pour ce mois. Veuillez passer à un palier supérieur ou attendre le mois prochain."
         );
         const quotaError: any = new Error(quotaMsg);
         quotaError.code = 'QUOTA_EXCEEDED';
@@ -471,14 +454,16 @@ export const api = {
         if (response.status === 401) {
           const authMsg = extractErrorMessage(
             data,
-            'Votre session a expiré ou est invalide. Veuillez vous reconnecter.'
+            payload.lang === 'ar'
+              ? 'انتهت صلاحية جلستك. يرجى إعادة تسجيل الدخول.'
+              : 'Votre session a expiré ou est invalide. Veuillez vous reconnecter.'
           );
           const authErr: any = new Error(authMsg);
           authErr.code = 'UNAUTHORIZED';
           authErr.status = 401;
           throw authErr;
         }
-        const errMsg = extractErrorMessage(data, `Erreur du service d'analyse (${response.status})`);
+        const errMsg = extractErrorMessage(data, rawText || `Erreur du service d'analyse (${response.status})`);
         const error: any = new Error(errMsg);
         error.status = response.status;
         error.data = data;
@@ -486,12 +471,12 @@ export const api = {
       }
 
       if (!data || typeof data !== 'object') {
-        throw new Error('Réponse inattendue du service d\'analyse.');
+        throw new Error("Réponse inattendue de l'Edge Function Supabase.");
       }
 
       // Format response directly from Supabase Edge Function into ProductAnalysis interface
       const score = Math.max(0, Math.min(100, Math.round(Number(data.score) || 0)));
-      const verdict = data.verdict || (score >= 70 ? 'excellent' : score < 45 ? 'revoir' : 'correct');
+      const verdict = (data.verdict || (score >= 70 ? 'excellent' : score < 45 ? 'revoir' : 'correct')) as Verdict;
       const demandeEstimee = normalizeMetricLevel(data.demande_estimee || data.demandeEstimee || 'Modérée');
       const niveauConcurrence = normalizeMetricLevel(data.niveau_concurrence || data.niveauConcurrence || 'Modérée');
       const prixMin = Number(data.prix_min ?? data.prixMin ?? payload.targetPriceDZD);
@@ -503,12 +488,13 @@ export const api = {
         : (Array.isArray(data.groundingSources) ? data.groundingSources : []);
       const finalPhotoUrl = data.photo_url || data.photoUrl || (payload.photoUrl && payload.photoUrl.trim() ? payload.photoUrl.trim() : undefined);
 
+      // CRITICAL REQUIREMENT: Use directly the id returned by the Edge Function (never generate a local ana_ id)
       const analysis: ProductAnalysis = {
-        id: data.id || `ana_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-        userId: data.user_id || data.userId || sessionInfo?.user?.id || 'current_user',
+        id: data.id,
+        userId: data.user_id || data.userId || sessionInfo?.user?.id || '',
         productName: data.nom_produit || data.productName || payload.productName,
         category: (data.categorie || data.category || payload.category) as ProductCategory,
-        targetPriceDZD: Number(data.prix || data.targetPriceDZD || payload.targetPriceDZD),
+        targetPriceDZD: Number(data.prix ?? data.targetPriceDZD ?? payload.targetPriceDZD),
         photoUrl: finalPhotoUrl,
         score,
         verdict,
@@ -522,25 +508,20 @@ export const api = {
         createdAt: data.created_at || data.createdAt || new Date().toISOString(),
       };
 
-      // Ensure persistent storage in Supabase database
-      if (sessionInfo?.user?.id) {
-        supabaseDb.saveAnalysis(analysis).catch(err => {
-          console.warn('[SupabaseDB] Enregistrement d\'analyse note:', err?.message || err);
-        });
+      // Persist in local backup history cache with real Supabase UUID
+      if (analysis.id) {
+        try {
+          const stored = localStorage.getItem('windz_offline_history');
+          const list: ProductAnalysis[] = stored ? JSON.parse(stored) : [];
+          const existingIdx = list.findIndex((a) => a.id === analysis.id);
+          if (existingIdx >= 0) {
+            list[existingIdx] = analysis;
+          } else {
+            list.unshift(analysis);
+          }
+          localStorage.setItem('windz_offline_history', JSON.stringify(list.slice(0, 100)));
+        } catch {}
       }
-
-      // Also persist in local backup history cache so user never loses their analysis or photo
-      try {
-        const stored = localStorage.getItem('windz_offline_history');
-        const list: ProductAnalysis[] = stored ? JSON.parse(stored) : [];
-        const existingIdx = list.findIndex((a) => a.id === analysis.id);
-        if (existingIdx >= 0) {
-          list[existingIdx] = analysis;
-        } else {
-          list.unshift(analysis);
-        }
-        localStorage.setItem('windz_offline_history', JSON.stringify(list.slice(0, 100)));
-      } catch {}
 
       const now = new Date();
       const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -562,7 +543,7 @@ export const api = {
           console.warn('[SupabaseAuth] Erreur mise à jour analyses_used:', err);
         });
 
-        // Also sync with server
+        // Also sync with server quota tracker
         fetch('/api/user/sync-quota', {
           method: 'POST',
           headers: {

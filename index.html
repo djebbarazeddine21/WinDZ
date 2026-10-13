@@ -2,6 +2,25 @@
 <html lang="fr" dir="ltr" class="dark">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      // Purge any lingering service workers and stale CacheStorage immediately
+      try {
+        if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistrations().then(function(regs) {
+            for (var i = 0; i < regs.length; i++) {
+              regs[i].unregister();
+            }
+          }).catch(function() {});
+        }
+        if (typeof window !== 'undefined' && 'caches' in window) {
+          window.caches.keys().then(function(names) {
+            for (var j = 0; j < names.length; j++) {
+              window.caches.delete(names[j]);
+            }
+          }).catch(function() {});
+        }
+      } catch (e) {}
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>WinDZ — Évaluation IA de Produits E-commerce Algérie</title>
     <meta name="description" content="Évaluez vos produits avant de dépenser en publicité en Algérie. Score prédictif en temps réel, saturation de marché DZ, analyse de concurrence, prix de vente optimal en DZD et accroches publicitaires." />
@@ -151,17 +170,43 @@
   <body class="bg-[#0F1B1E] text-slate-100 font-sans antialiased selection:bg-[#D4A34A]/30 selection:text-[#F3E5AB]">
     <div id="root"></div>
     <script>
-      // Register PWA Service Worker for automatic installability on mobile & desktop
-      if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || window.location.hostname === 'localhost')) {
-        window.addEventListener('load', function() {
-          navigator.serviceWorker.register('/sw.js', { scope: '/' })
-            .then(function(registration) {
-              console.log('[WinDZ PWA] Service Worker actif et enregistré avec succès:', registration.scope);
-            })
-            .catch(function(err) {
-              console.warn('[WinDZ PWA] Erreur enregistrement Service Worker:', err);
-            });
-        });
+      // WinDZ PWA Early Event Capture (ensures beforeinstallprompt is never missed before React mounts)
+      try {
+        window.__windz_deferred_prompt = null;
+        var isStandaloneMatch = (typeof window.matchMedia === 'function') ? window.matchMedia('(display-mode: standalone)').matches : false;
+        var isNavStandalone = (typeof navigator !== 'undefined' && (navigator.standalone === true));
+        var isRefAndroid = (typeof document !== 'undefined' && typeof document.referrer === 'string' && document.referrer.indexOf('android-app://') !== -1);
+        window.__windz_is_installed = Boolean(isStandaloneMatch || isNavStandalone || isRefAndroid);
+      } catch (e) {
+        window.__windz_deferred_prompt = null;
+        window.__windz_is_installed = false;
+      }
+
+      window.addEventListener('beforeinstallprompt', function(e) {
+        e.preventDefault();
+        window.__windz_deferred_prompt = e;
+        window.dispatchEvent(new CustomEvent('windz-beforeinstallprompt-available'));
+        if (window.location.search.includes('debug') || window.location.pathname === '/pwa-debug') {
+          console.log('[PWA] beforeinstallprompt captured early');
+        }
+      });
+
+      window.addEventListener('appinstalled', function() {
+        window.__windz_is_installed = true;
+        window.__windz_deferred_prompt = null;
+        window.dispatchEvent(new CustomEvent('windz-appinstalled'));
+        if (window.location.search.includes('debug') || window.location.pathname === '/pwa-debug') {
+          console.log('[PWA] App successfully installed');
+        }
+      });
+
+      // Purge all legacy SW caches to ensure React chunks and Vite modules are loaded fresh
+      if (typeof window !== 'undefined' && 'caches' in window) {
+        window.caches.keys().then(function(names) {
+          names.forEach(function(name) {
+            window.caches.delete(name);
+          });
+        }).catch(function() {});
       }
     </script>
     <script type="module" src="/src/main.tsx"></script>

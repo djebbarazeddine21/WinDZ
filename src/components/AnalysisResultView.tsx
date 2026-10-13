@@ -547,30 +547,71 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
 
       {/* Grounding Sources (if returned by Supabase Edge Function) */}
       {analysis.groundingSources && analysis.groundingSources.length > 0 && (
-        <div className="bg-[#152428] border border-[#233A3E] rounded-2xl p-4 shadow-md">
-          <div className="flex items-center gap-2 text-xs font-bold text-white uppercase tracking-wider mb-2.5">
-            <Globe className="w-3.5 h-3.5 text-[#2A9D8F]" />
-            <span>{lang === 'ar' ? 'المصادر ومؤشرات السوق' : 'Sources & Données de Marché'}</span>
+        <div className="bg-[#152428] border border-[#233A3E] rounded-2xl p-4 sm:p-5 shadow-md space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2 text-xs font-bold text-white uppercase tracking-wider">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#2A9D8F] opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-[#2A9D8F]"></span>
+              </span>
+              <Globe className="w-3.5 h-3.5 text-[#2A9D8F]" />
+              <span>{lang === 'ar' ? 'مصادر وتحقق السوق الحي' : 'Sources & Données Réelles de Marché'}</span>
+            </div>
+            <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-[#2A9D8F]/15 border border-[#2A9D8F]/30 text-[#48CFAD] font-medium flex items-center gap-1.5">
+              <span>{lang === 'ar' ? 'بحث ويب حي (Google Grounding)' : 'Recherche Web en direct'}</span>
+            </span>
           </div>
+          <p className="text-[11px] text-slate-400">
+            {lang === 'ar'
+              ? 'تم استخراج هذه النتائج بالاعتماد على محرك بحث الويب في الوقت الفعلي لتحليل السوق والمنافسين في الجزائر.'
+              : 'Cette analyse s\'appuie sur une recherche web en temps réel pour évaluer la concurrence et la demande en Algérie.'}
+          </p>
           <div className="space-y-2">
             {analysis.groundingSources.map((source: any, idx: number) => {
-              const title = typeof source === 'string' ? source : (source.title || source.name || source.url || `Source #${idx + 1}`);
-              const url = typeof source === 'object' && source?.url ? source.url : null;
+              let url: string | null = null;
+              let title = '';
+
+              if (typeof source === 'string') {
+                if (source.startsWith('http://') || source.startsWith('https://')) {
+                  url = source;
+                  try {
+                    title = new URL(source).hostname.replace(/^www\./, '');
+                  } catch {
+                    title = source;
+                  }
+                } else {
+                  title = source;
+                }
+              } else if (typeof source === 'object' && source !== null) {
+                url = source.url || source.uri || source.link || source.web?.uri || null;
+                const rawTitle = source.title || source.name || source.web?.title;
+                if (rawTitle) {
+                  title = rawTitle;
+                } else if (url) {
+                  try {
+                    title = new URL(url).hostname.replace(/^www\./, '');
+                  } catch {
+                    title = url;
+                  }
+                } else {
+                  title = `Source #${idx + 1}`;
+                }
+              }
 
               return (
                 <div
                   key={idx}
-                  className="bg-[#0F1B1E] border border-[#1E3338] px-3 py-2 rounded-xl flex items-center justify-between text-xs text-slate-300"
+                  className="bg-[#0F1B1E] border border-[#1E3338] px-3.5 py-2.5 rounded-xl flex items-center justify-between text-xs text-slate-300 hover:border-[#2A9D8F]/40 transition"
                 >
-                  <span className="truncate pr-2">{title}</span>
+                  <span className="truncate pr-2 font-medium">{title}</span>
                   {url && (
                     <a
                       href={url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-[#2A9D8F] hover:text-[#48CFAD] shrink-0 flex items-center gap-1 font-semibold text-[11px]"
+                      className="text-[#2A9D8F] hover:text-[#48CFAD] shrink-0 flex items-center gap-1 font-semibold text-[11px] underline decoration-[#2A9D8F]/40 hover:decoration-[#48CFAD]"
                     >
-                      <span>{lang === 'ar' ? 'زيارة' : 'Consulter'}</span>
+                      <span>{lang === 'ar' ? 'معاينة' : 'Consulter'}</span>
                       <ExternalLink className="w-3 h-3" />
                     </a>
                   )}

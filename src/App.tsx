@@ -37,6 +37,9 @@ import { AuthModal } from './components/AuthModal';
 import { PublicLandingPageView } from './components/PublicLandingPageView';
 import { GeneratedLandingPageResultView } from './components/GeneratedLandingPageResultView';
 import { SellerLandingPagesView } from './components/SellerLandingPagesView';
+import { PWAInstallBanner } from './components/PWAInstallBanner';
+import { PWADebugView } from './components/PWADebugView';
+import { usePWAInstall } from './hooks/usePWAInstall';
 
 export default function App() {
   const [lang, setLang] = useState<Language>(() => {
@@ -62,10 +65,28 @@ export default function App() {
     contactEmail: 'azzouzdroits@gmail.com',
   });
 
-  // Views: 'landing' | 'form' | 'result' | 'history' | 'admin' | 'public_page' | 'generated_landing' | 'seller_landings'
+  // Centralized PWA install hook
+  const pwa = usePWAInstall();
+  const {
+    canInstall,
+    isInstalled,
+    isStandalone,
+    installApp,
+    isIOS,
+    isInAppBrowser,
+    openInChrome,
+    resetDismissed,
+  } = pwa;
+
+  // Views: 'landing' | 'form' | 'result' | 'history' | 'admin' | 'public_page' | 'generated_landing' | 'seller_landings' | 'pwa_debug'
   const [currentView, setCurrentView] = useState<
-    'landing' | 'form' | 'result' | 'history' | 'admin' | 'public_page' | 'generated_landing' | 'seller_landings'
-  >('landing');
+    'landing' | 'form' | 'result' | 'history' | 'admin' | 'public_page' | 'generated_landing' | 'seller_landings' | 'pwa_debug'
+  >(() => {
+    if (typeof window !== 'undefined' && window.location.pathname === '/pwa-debug') {
+      return 'pwa_debug';
+    }
+    return 'landing';
+  });
   const [activeAnalysis, setActiveAnalysis] = useState<ProductAnalysis | null>(null);
   const [activePublicPage, setActivePublicPage] = useState<PublicLandingPage | null>(null);
   const [lastGeneratedPage, setLastGeneratedPage] = useState<PublicLandingPage | null>(() => {
@@ -147,29 +168,37 @@ export default function App() {
             console.warn('[App] Erreur getMe sync:', err);
           });
 
-          // Check if user directly loaded a public landing page (/p/:slug)
-          const publicPathMatch = window.location.pathname.match(/^\/p\/([^/?#]+)/);
-          if (publicPathMatch) {
-            const slug = decodeURIComponent(publicPathMatch[1]);
-            const resolved = await resolveLandingPage(slug);
-            setActivePublicPage(resolved);
-            setCurrentView('public_page');
+          // Check if user directly loaded pwa-debug or a public landing page
+          if (window.location.pathname === '/pwa-debug') {
+            setCurrentView('pwa_debug');
           } else {
-            if (mappedUser.role === 'admin') {
-              setCurrentView('admin');
+            const publicPathMatch = window.location.pathname.match(/^\/p\/([^/?#]+)/);
+            if (publicPathMatch) {
+              const slug = decodeURIComponent(publicPathMatch[1]);
+              const resolved = await resolveLandingPage(slug);
+              setActivePublicPage(resolved);
+              setCurrentView('public_page');
             } else {
-              setCurrentView('form');
+              if (mappedUser.role === 'admin') {
+                setCurrentView('admin');
+              } else {
+                setCurrentView('form');
+              }
             }
           }
         } else {
           setUser(null);
-          // Check if visitor directly loaded a public landing page (/p/:slug)
-          const publicPathMatch = window.location.pathname.match(/^\/p\/([^/?#]+)/);
-          if (publicPathMatch) {
-            const slug = decodeURIComponent(publicPathMatch[1]);
-            const resolved = await resolveLandingPage(slug);
-            setActivePublicPage(resolved);
-            setCurrentView('public_page');
+          if (window.location.pathname === '/pwa-debug') {
+            setCurrentView('pwa_debug');
+          } else {
+            // Check if visitor directly loaded a public landing page (/p/:slug)
+            const publicPathMatch = window.location.pathname.match(/^\/p\/([^/?#]+)/);
+            if (publicPathMatch) {
+              const slug = decodeURIComponent(publicPathMatch[1]);
+              const resolved = await resolveLandingPage(slug);
+              setActivePublicPage(resolved);
+              setCurrentView('public_page');
+            }
           }
         }
       } catch (sbErr) {
@@ -354,13 +383,17 @@ export default function App() {
   useEffect(() => {
     const handlePopState = async () => {
       const pathname = window.location.pathname;
+      if (pathname === '/pwa-debug') {
+        setCurrentView('pwa_debug');
+        return;
+      }
       const match = pathname.match(/^\/p\/([^/?#]+)/);
       if (match) {
         const slug = decodeURIComponent(match[1]);
         const resolved = await resolveLandingPage(slug);
         setActivePublicPage(resolved);
         setCurrentView('public_page');
-      } else if (currentView === 'public_page') {
+      } else if (currentView === 'public_page' || currentView === 'pwa_debug') {
         setCurrentView(user ? 'form' : 'landing');
       }
     };
@@ -407,6 +440,7 @@ export default function App() {
   if (currentView === 'public_page' && activePublicPage) {
     return (
       <div className="min-h-screen">
+        <PWAInstallBanner lang={lang} installState={pwa} />
         <PublicLandingPageView
           page={activePublicPage}
           initialLang={lang}
@@ -426,6 +460,19 @@ export default function App() {
     );
   }
 
+  // If in PWA developer diagnostics view (/pwa-debug)
+  if (currentView === 'pwa_debug') {
+    return (
+      <PWADebugView
+        installState={pwa}
+        onBackToApp={() => {
+          window.history.pushState({}, '', '/');
+          setCurrentView(user ? (user.role === 'admin' ? 'admin' : 'form') : 'landing');
+        }}
+      />
+    );
+  }
+
   // If in admin view and user is admin
   if (currentView === 'admin' && user?.role === 'admin') {
     return (
@@ -441,6 +488,9 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0F1B1E] text-slate-100 flex flex-col selection:bg-[#D4A34A]/30 selection:text-[#F3E5AB] w-full max-w-full overflow-x-hidden">
+      {/* PWA Automatic Installation Banner & Dialog for Android & iOS */}
+      <PWAInstallBanner lang={lang} installState={pwa} />
+
       {/* Payment Callback Notification Banner */}
       {paymentAlert && (
         <div
@@ -646,6 +696,27 @@ export default function App() {
 
           {/* Right Header Actions (Lang, Auth, User Status) */}
           <div className="flex items-center gap-2.5 shrink-0">
+            {/* Install PWA App Button: strictly conditional on not installed/standalone */}
+            {!isStandalone && !isInstalled && (canInstall || isIOS || isInAppBrowser) && (
+              <button
+                id="header-install-pwa-button"
+                onClick={async () => {
+                  if (canInstall) {
+                    await installApp();
+                  } else if (isInAppBrowser) {
+                    openInChrome();
+                  } else {
+                    resetDismissed();
+                  }
+                }}
+                className="hidden sm:inline-flex items-center gap-1.5 h-9 px-3 rounded-xl border border-[#D4A34A]/50 bg-gradient-to-r from-[#D4A34A]/20 to-[#D4A34A]/10 hover:bg-[#D4A34A]/25 text-[#F3E5AB] font-bold text-xs transition cursor-pointer active:scale-95 shadow-sm"
+                title={lang === 'ar' ? '📲 تثبيت WinDZ' : '📲 Installer WinDZ'}
+              >
+                <Smartphone className="w-3.5 h-3.5 text-[#D4A34A]" />
+                <span>{lang === 'ar' ? '📲 تثبيت WinDZ' : '📲 Installer WinDZ'}</span>
+              </button>
+            )}
+
             {/* Language Switcher - Pure icon, perfectly balanced */}
             <button
               id="header-language-toggle"
@@ -800,6 +871,30 @@ export default function App() {
             >
               FAQ
             </button>
+
+            {/* Install PWA Button for Mobile: strictly conditional */}
+            {!isStandalone && !isInstalled && (canInstall || isIOS || isInAppBrowser) && (
+              <button
+                id="mobile-install-pwa-button"
+                onClick={async () => {
+                  setMobileMenuOpen(false);
+                  if (canInstall) {
+                    await installApp();
+                  } else if (isInAppBrowser) {
+                    openInChrome();
+                  } else {
+                    resetDismissed();
+                  }
+                }}
+                className="w-full py-2.5 px-3 rounded-xl border border-[#D4A34A]/50 bg-[#D4A34A]/20 text-[#F3E5AB] font-bold text-xs flex items-center justify-between transition cursor-pointer shadow-sm active:scale-98"
+              >
+                <div className="flex items-center gap-2">
+                  <Smartphone className="w-4 h-4 text-[#D4A34A]" />
+                  <span>{lang === 'ar' ? '📲 تثبيت WinDZ' : '📲 Installer WinDZ'}</span>
+                </div>
+                <Download className="w-3.5 h-3.5 text-[#D4A34A]" />
+              </button>
+            )}
 
             <button
               onClick={() => {

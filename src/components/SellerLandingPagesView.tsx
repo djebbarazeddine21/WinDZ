@@ -37,6 +37,7 @@ import {
 } from 'lucide-react';
 import { PublicLandingPage, LandingPageOrder, OrderStatus, User, SupportedCarrier, SellerCarrierSettings } from '../types';
 import { ALGERIAN_WILAYAS } from '../lib/wilayas';
+import { formatWhatsAppNumber, buildWhatsAppChatUrl, formatPhoneDisplay, isValidPhoneNumber } from '../lib/whatsapp';
 
 export const SUPABASE_RLS_FIX_SQL = `-- WinDZ : Correction récursion infinie RLS sur profiles (Erreur 42P17)
 -- À coller et exécuter dans l'éditeur SQL de votre tableau de bord Supabase :
@@ -333,13 +334,14 @@ export const SellerLandingPagesView: React.FC<SellerLandingPagesViewProps> = ({
     setSavingWhatsApp(true);
     setWhatsAppSaveMsg(null);
     try {
-      const cleanNum = whatsappNumero.replace(/[^0-9]/g, '');
+      const cleanNum = formatWhatsAppNumber(whatsappNumero);
       const success = await api.landingPages.updateWhatsAppSettings(
         selectedPage.id || selectedPage.slug,
         whatsappActif,
         cleanNum
       );
       if (success) {
+        setWhatsappNumero(cleanNum);
         const updated = {
           ...selectedPage,
           whatsapp_actif: whatsappActif,
@@ -353,7 +355,7 @@ export const SellerLandingPagesView: React.FC<SellerLandingPagesViewProps> = ({
         );
         setWhatsAppSaveMsg({
           type: 'success',
-          text: isAr ? 'تم حفظ إعدادات واتساب بنجاح في قاعدة البيانات' : 'Paramètres WhatsApp enregistrés avec succès !',
+          text: isAr ? 'تم حفظ وتنسيق رقم واتساب بنجاح في قاعدة البيانات' : 'Paramètres WhatsApp enregistrés et formatés avec succès !',
         });
         setTimeout(() => setWhatsAppSaveMsg(null), 4000);
       } else {
@@ -1509,8 +1511,8 @@ export const SellerLandingPagesView: React.FC<SellerLandingPagesViewProps> = ({
               <div className="sm:col-span-2 space-y-1.5">
                 <label className="block text-xs font-semibold text-slate-300">
                   {isAr
-                    ? 'رقم واتساب التاجر (مع الرمز الدولي، مثال: 213555123456)'
-                    : 'Numéro WhatsApp du vendeur (avec indicatif, ex: 213555123456)'}
+                    ? 'رقم واتساب التاجر (مثال: 0562275287 أو 213562275287)'
+                    : 'Numéro WhatsApp du vendeur (ex: 0562275287 ou 213562275287)'}
                 </label>
                 <div className="relative">
                   <input
@@ -1518,16 +1520,35 @@ export const SellerLandingPagesView: React.FC<SellerLandingPagesViewProps> = ({
                     id="input-whatsapp-numero"
                     value={whatsappNumero}
                     onChange={(e) => setWhatsappNumero(e.target.value)}
-                    placeholder="213555123456"
+                    placeholder="0562275287"
                     className="w-full pl-9 pr-3 py-2.5 bg-[#0F1B1E] border border-[#233A3E] focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 rounded-xl text-white text-xs font-mono placeholder:text-slate-500 outline-none transition"
                   />
                   <Phone className="w-4 h-4 text-emerald-400 absolute left-3 top-3 pointer-events-none" />
                 </div>
-                <p className="text-[11px] text-slate-400">
-                  {isAr
-                    ? 'أدخل الرقم مع الرمز الدولي بدون إشارة + أو مسافات (مثال: 213555123456 أو 213661123456).'
-                    : 'Indiquez le code pays sans signe + ni espaces (ex: 213555123456 pour les réseaux algériens).'}
-                </p>
+                <div className="text-[11px] text-slate-400 space-y-1">
+                  <p>
+                    {isAr
+                      ? 'يمكنك إدخال رقمك المحلي (05/06/07). يقوم النظام تلقائياً بتحويله إلى الصيغة الدولية (+213) لضمان فتح المحادثة مباشرة في واتساب بدون أخطاء.'
+                      : 'Vous pouvez saisir votre numéro local habituel (05/06/07). Le système le convertit automatiquement au format international (+213) pour éviter l’erreur WhatsApp.'}
+                  </p>
+                  {whatsappNumero.trim() && (
+                    <div className="flex items-center gap-2 pt-0.5 flex-wrap">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 font-mono text-[10px] font-semibold border border-emerald-500/30">
+                        <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                        <span>Lien WhatsApp : wa.me/{formatWhatsAppNumber(whatsappNumero)}</span>
+                      </span>
+                      <a
+                        href={buildWhatsAppChatUrl(whatsappNumero, 'Salam ! Test de mon bouton WhatsApp WinDZ')}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-400 hover:text-emerald-300 underline"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        <span>{isAr ? 'تجربة الرابط' : 'Tester le lien'}</span>
+                      </a>
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className="space-y-1.5">
@@ -1857,11 +1878,12 @@ export const SellerLandingPagesView: React.FC<SellerLandingPagesViewProps> = ({
                               <span>{isAr ? 'اتصال' : 'Appeler'}</span>
                             </a>
                             <a
-                              href={`https://wa.me/${cleanPhone.replace('+', '')}?text=${encodeURIComponent(
+                              href={buildWhatsAppChatUrl(
+                                clientPhone,
                                 isAr
                                   ? `مرحباً ${order.nom_client || ''}، نتصل بكم بخصوص طلبكم لمنتج ${selectedPage.productName}.`
                                   : `Bonjour ${order.nom_client || ''}, nous vous contactons pour confirmer votre commande de ${selectedPage.productName}.`
-                              )}`}
+                              )}
                               target="_blank"
                               rel="noreferrer"
                               className="px-2 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 text-[10px] font-semibold flex items-center gap-1 transition"

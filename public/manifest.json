@@ -1,18 +1,17 @@
 {
   "id": "/",
-  "name": "WinDZ — Évaluation E-commerce IA",
+  "name": "WinDZ",
   "short_name": "WinDZ",
-  "description": "Évaluez la rentabilité de vos produits e-commerce en Algérie avant de dépenser en publicité. IA prédictive 58 wilayas et paiement COD.",
+  "description": "منصة الذكاء الاصطناعي الرائدة لتحليل المنتجات في الجزائر",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "display_override": ["window-controls-overlay", "standalone"],
   "orientation": "portrait",
-  "theme_color": "#0B1315",
-  "background_color": "#0B1315",
-  "categories": ["business", "finance", "shopping", "utilities"],
-  "lang": "fr-DZ",
-  "dir": "ltr",
+  "lang": "ar-DZ",
+  "dir": "rtl",
+  "theme_color": "#0F1B1E",
+  "background_color": "#0F1B1E",
+  "categories": ["business", "shopping", "utilities"],
   "icons": [
     {
       "src": "/pwa-192x192.png",
@@ -37,20 +36,26 @@
       "sizes": "180x180",
       "type": "image/png",
       "purpose": "any"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
     }
   ],
   "shortcuts": [
     {
-      "name": "Nouvelle Analyse",
-      "short_name": "Analyser",
-      "description": "Analyser un produit e-commerce en Algérie",
+      "name": "تحليل منتج جديد",
+      "short_name": "تحليل",
+      "description": "تحليل منتج للتجارة الإلكترونية في الجزائر",
       "url": "/?action=analyze",
       "icons": [{ "src": "/pwa-192x192.png", "sizes": "192x192" }]
     },
     {
-      "name": "Mes Analyses",
-      "short_name": "Historique",
-      "description": "Consulter mes rapports de rentabilité",
+      "name": "سجل التحليلات",
+      "short_name": "السجل",
+      "description": "عرض تقارير ربحية المنتجات",
       "url": "/?tab=history",
       "icons": [{ "src": "/pwa-192x192.png", "sizes": "192x192" }]
     }
