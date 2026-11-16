@@ -37,6 +37,7 @@ export interface ProductAnalysis {
   category: ProductCategory;
   targetPriceDZD: number;
   photoUrl?: string;
+  photoUrls?: string[];
   score: number;
   verdict: Verdict;
   demandeEstimee: LevelMetric;
@@ -142,6 +143,8 @@ export interface PublicLandingPage {
   originalPriceDZD?: number;
   photoUrl?: string;
   photo_url?: string;
+  photoUrls?: string[];
+  photo_urls?: string[];
   headline: string;
   subheadline?: string;
   description?: string;
@@ -175,6 +178,34 @@ export interface PublicLandingPage {
   orders_count?: number;
   isPublished?: boolean;
   is_published?: boolean;
+  localizedContent?: {
+    fr?: {
+      headline?: string;
+      subheadline?: string;
+      description?: string;
+      badgeKicker?: string;
+      ctaText?: string;
+      guaranteeBadgeText?: string;
+      deliveryInfo?: string;
+      benefits?: LandingPageBenefit[];
+      features?: string[];
+      faq?: LandingPageFaqItem[];
+      testimonials?: LandingPageTestimonial[];
+    };
+    ar?: {
+      headline?: string;
+      subheadline?: string;
+      description?: string;
+      badgeKicker?: string;
+      ctaText?: string;
+      guaranteeBadgeText?: string;
+      deliveryInfo?: string;
+      benefits?: LandingPageBenefit[];
+      features?: string[];
+      faq?: LandingPageFaqItem[];
+      testimonials?: LandingPageTestimonial[];
+    };
+  };
   createdAt: string;
   created_at?: string;
 }

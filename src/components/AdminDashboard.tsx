@@ -53,6 +53,7 @@ interface AdminDashboardProps {
   platformSettings: PlatformSettings;
   onSettingsUpdated: (settings: PlatformSettings) => void;
   onExitAdmin: () => void;
+  onOpenPublicPage?: (pageOrSlug: any) => void;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
@@ -61,6 +62,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   platformSettings,
   onSettingsUpdated,
   onExitAdmin,
+  onOpenPublicPage,
 }) => {
   const t = translations[lang];
   const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'payments' | 'landings' | 'settings'>('overview');
@@ -973,15 +975,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                           {/* Action Buttons */}
                           <div className="p-3 pt-0 border-t border-[#1E3338]/60 flex items-center justify-between gap-2">
-                            <a
-                              href={`/p/${page.slug}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="px-2.5 py-1.5 rounded-lg bg-[#152428] hover:bg-[#1E3338] border border-[#233A3E] text-slate-200 hover:text-white text-xs font-semibold inline-flex items-center gap-1.5 transition"
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (onOpenPublicPage) {
+                                  onOpenPublicPage(page);
+                                } else {
+                                  window.location.href = `/?p=${encodeURIComponent(page.slug)}`;
+                                }
+                              }}
+                              className="px-2.5 py-1.5 rounded-lg bg-[#152428] hover:bg-[#1E3338] border border-[#233A3E] text-slate-200 hover:text-white text-xs font-semibold inline-flex items-center gap-1.5 transition cursor-pointer"
                             >
                               <ExternalLink className="w-3.5 h-3.5 text-[#2A9D8F]" />
                               <span>{lang === 'ar' ? 'معاينة' : 'Voir'}</span>
-                            </a>
+                            </button>
 
                             <button
                               onClick={() => setLandingToDelete(page)}

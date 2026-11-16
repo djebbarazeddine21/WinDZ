@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Camera, Image as ImageIcon, Sparkles, Loader2, AlertCircle, ArrowUpRight, Zap, Check, LogIn } from 'lucide-react';
+import { Camera, Image as ImageIcon, Sparkles, Loader2, AlertCircle, ArrowUpRight, Zap, LogIn, X, Plus, Star } from 'lucide-react';
 import { ProductCategory, ProductAnalysis, User } from '../types';
 import { translations, Language, getCategoryLabel } from '../lib/i18n';
 import { api } from '../lib/api';
@@ -12,6 +12,15 @@ interface ProductFormProps {
   onRequestUpgrade: () => void;
   onRequestAuth: () => void;
 }
+
+interface UploadedPhotoItem {
+  id: string;
+  preview: string;
+  url: string;
+  uploading: boolean;
+}
+
+const MAX_PHOTOS = 6;
 
 const CATEGORIES: ProductCategory[] = [
   'Mode & Vêtements',
@@ -35,9 +44,7 @@ export const ProductForm: React.FC<ProductFormProps> = ({
   const [productName, setProductName] = useState('');
   const [category, setCategory] = useState<ProductCategory>('Mode & Vêtements');
   const [targetPriceDZD, setTargetPriceDZD] = useState('');
-  const [photoUrl, setPhotoUrl] = useState<string | undefined>(undefined);
-  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
-  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [photos, setPhotos] = useState<UploadedPhotoItem[]>([]);
 
   const [isLoading, setIsLoading] = useState(false);
   const [loadingStep, setLoadingStep] = useState(1);
@@ -46,6 +53,8 @@ export const ProductForm: React.FC<ProductFormProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
+
+  const isUploadingPhoto = photos.some((p) => p.uploading);
 
   // Remaining analyses
   const maxLimit = user ? (user.analysesLimit || (user.subscriptionTier === 'pro' ? 200 : user.subscriptionTier === 'basic' ? 30 : 1)) : 1;
@@ -90,28 +99,92 @@ export const ProductForm: React.FC<ProductFormProps> = ({
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setIsUploadingPhoto(true);
+    const fileList = e.target.files;
+    if (!fileList || fileList.length === 0) return;
+
+    const selectedFiles: File[] = Array.from(fileList);
+    // Reset input value so selecting the same file again triggers onChange
+    e.target.value = '';
+
+    const remainingSlots = MAX_PHOTOS - photos.length;
+    if (remainingSlots <= 0) {
+      setErrorMessage(
+        lang === 'ar'
+          ? 'لقد وصلت إلى الحد الأقصى المسموح به (6 صور).'
+          : 'Vous avez atteint la limite maximale de 6 photos.'
+      );
+      return;
+    }
+
+    const filesToProcess = selectedFiles.slice(0, remainingSlots);
+    if (selectedFiles.length > remainingSlots) {
+      setErrorMessage(
+        lang === 'ar'
+          ? `يمكنك إضافة ${MAX_PHOTOS} صور كحد أقصى. تم اختيار أول ${remainingSlots} صور.`
+          : `Maximum ${MAX_PHOTOS} photos autorisées. Les ${remainingSlots} premières photos ont été ajoutées.`
+      );
+    } else {
+      setErrorMessage(null);
+    }
+
+    for (const file of filesToProcess) {
+      const tempId = `photo_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
       try {
         // 1. Instant compression: generates a high-quality data URL immediately
         const compressedBase64 = await compressImage(file);
-        if (compressedBase64) {
-          setPhotoPreview(compressedBase64);
-          setPhotoUrl(compressedBase64);
-        }
+        if (!compressedBase64) continue;
+
+        setPhotos((prev) => {
+          if (prev.length >= MAX_PHOTOS) return prev;
+          return [
+            ...prev,
+            {
+              id: tempId,
+              preview: compressedBase64,
+              url: compressedBase64,
+              uploading: true,
+            },
+          ];
+        });
 
         // 2. Persist to server / Supabase Storage in background
-        const finalUrl = await supabaseStorage.uploadProductImage(file, compressedBase64);
-        if (finalUrl) {
-          setPhotoUrl(finalUrl);
-        }
-      } catch (uploadErr) {
-        console.warn('Notice upload image bucket product-photos:', uploadErr);
-      } finally {
-        setIsUploadingPhoto(false);
+        supabaseStorage
+          .uploadProductImage(file, compressedBase64)
+          .then((finalUrl) => {
+            setPhotos((prev) =>
+              prev.map((item) =>
+                item.id === tempId
+                  ? { ...item, url: finalUrl || compressedBase64, uploading: false }
+                  : item
+              )
+            );
+          })
+          .catch((uploadErr) => {
+            console.warn('Notice upload image bucket product-photos:', uploadErr);
+            setPhotos((prev) =>
+              prev.map((item) =>
+                item.id === tempId ? { ...item, uploading: false } : item
+              )
+            );
+          });
+      } catch (err) {
+        console.warn('Erreur compression photo:', err);
       }
     }
+  };
+
+  const handleRemovePhoto = (id: string) => {
+    setPhotos((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const handleSetPrimaryPhoto = (id: string) => {
+    setPhotos((prev) => {
+      const idx = prev.findIndex((item) => item.id === id);
+      if (idx <= 0) return prev;
+      const target = prev[idx];
+      const others = prev.filter((_, i) => i !== idx);
+      return [target, ...others];
+    });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -139,13 +212,15 @@ export const ProductForm: React.FC<ProductFormProps> = ({
     }, 1800);
 
     try {
-      // Call Supabase Edge Function directly via api.products.analyze
-      // It passes the active user session token in Authorization: Bearer <token>
+      const allPhotoUrls = photos.map((p) => p.url).filter(Boolean);
+      const primaryPhotoUrl = allPhotoUrls[0] || undefined;
+
       const data = await api.products.analyze({
         productName: productName.trim(),
         category,
         targetPriceDZD: priceNum,
-        photoUrl: photoUrl || undefined,
+        photoUrl: primaryPhotoUrl,
+        photoUrls: allPhotoUrls.length > 0 ? allPhotoUrls : undefined,
         lang,
       });
 
@@ -178,7 +253,6 @@ export const ProductForm: React.FC<ProductFormProps> = ({
         );
       } else if (err.code === 'UNAUTHORIZED' || err.status === 401) {
         setQuotaReached(false);
-        // Clear message if expired/unauthorized without silently or abruptly redirecting
         setErrorMessage(
           parseErrText(
             err,
@@ -386,53 +460,139 @@ export const ProductForm: React.FC<ProductFormProps> = ({
               </div>
             </div>
 
-            {/* Photo Selection / Camera */}
+            {/* Up to 6 Photos Selection / Camera */}
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                {t.photoLabel}
-              </label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-semibold text-slate-300">
+                  {t.photoLabel}
+                </label>
+                <span
+                  className={`text-[11px] font-bold px-2 py-0.5 rounded-md border ${
+                    photos.length >= MAX_PHOTOS
+                      ? 'bg-[#D4A34A]/15 text-[#D4A34A] border-[#D4A34A]/40'
+                      : 'bg-[#0F1B1E] text-slate-400 border-[#233A3E]'
+                  }`}
+                >
+                  <bdi dir="ltr">{photos.length} / {MAX_PHOTOS}</bdi> {lang === 'ar' ? 'صور' : 'photos'}
+                </span>
+              </div>
 
-              {photoPreview ? (
-                <div className="relative rounded-xl overflow-hidden border border-[#2A9D8F]/40 max-h-48 flex items-center justify-center bg-[#0F1B1E]">
-                  <img
-                    src={photoPreview}
-                    alt="Aperçu produit"
-                    className="max-h-48 w-full object-contain"
-                  />
-                  {isUploadingPhoto && (
-                    <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-2 text-xs text-white">
-                      <Loader2 className="w-4 h-4 animate-spin text-[#D4A34A]" />
-                      <span>{lang === 'ar' ? 'جاري رفع الصورة...' : 'Envoi de la photo...'}</span>
-                    </div>
+              <p className="text-[11px] text-slate-400 mb-2.5">
+                {t.photoHint}
+              </p>
+
+              {/* Uploaded Photos Thumbnail Grid (1 to 6 photos) */}
+              {photos.length > 0 && (
+                <div className="grid grid-cols-3 sm:grid-cols-6 gap-2.5 mb-3">
+                  {photos.map((photo, index) => {
+                    const isPrimary = index === 0;
+                    return (
+                      <div
+                        key={photo.id}
+                        onClick={() => !isPrimary && handleSetPrimaryPhoto(photo.id)}
+                        title={
+                          isPrimary
+                            ? lang === 'ar'
+                              ? 'الصورة الرئيسية'
+                              : 'Photo principale'
+                            : lang === 'ar'
+                            ? 'انقر لتعيينها كصورة رئيسية'
+                            : 'Cliquer pour définir comme photo principale'
+                        }
+                        className={`relative aspect-square rounded-xl overflow-hidden bg-[#0F1B1E] border transition group ${
+                          isPrimary
+                            ? 'border-[#D4A34A] ring-1 ring-[#D4A34A]/50'
+                            : 'border-[#233A3E] hover:border-[#2A9D8F] cursor-pointer'
+                        }`}
+                      >
+                        <img
+                          src={photo.preview}
+                          alt={`${productName || 'Produit'} ${index + 1}`}
+                          className="w-full h-full object-cover"
+                        />
+
+                        {/* Uploading Spinner Overlay */}
+                        {photo.uploading && (
+                          <div className="absolute inset-0 bg-black/65 flex items-center justify-center">
+                            <Loader2 className="w-4 h-4 animate-spin text-[#D4A34A]" />
+                          </div>
+                        )}
+
+                        {/* Remove Photo Button */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRemovePhoto(photo.id);
+                          }}
+                          title={lang === 'ar' ? 'حذف الصورة' : 'Supprimer cette photo'}
+                          className="absolute top-1 right-1 w-5 h-5 rounded-md bg-black/75 hover:bg-red-600 text-white flex items-center justify-center transition cursor-pointer shadow"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+
+                        {/* Primary / Index Badge */}
+                        <div
+                          className={`absolute bottom-0 inset-x-0 px-1 py-0.5 text-[9px] font-bold text-center truncate flex items-center justify-center gap-0.5 ${
+                            isPrimary
+                              ? 'bg-[#D4A34A] text-slate-950'
+                              : 'bg-black/70 text-slate-200 group-hover:bg-[#2A9D8F] group-hover:text-white'
+                          }`}
+                        >
+                          {isPrimary ? (
+                            <>
+                              <Star className="w-2.5 h-2.5 fill-current shrink-0" />
+                              <span>{lang === 'ar' ? 'الرئيسية' : 'Principale'}</span>
+                            </>
+                          ) : (
+                            <span>#{index + 1}</span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* Quick "+ Add" slot inside the grid when between 1 and 5 photos */}
+                  {photos.length < MAX_PHOTOS && (
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="aspect-square rounded-xl border border-dashed border-[#233A3E] hover:border-[#2A9D8F] bg-[#0F1B1E]/60 text-slate-400 hover:text-white flex flex-col items-center justify-center gap-1 transition cursor-pointer"
+                      title={lang === 'ar' ? 'إضافة صورة أخرى' : 'Ajouter une photo'}
+                    >
+                      <Plus className="w-4 h-4 text-[#2A9D8F]" />
+                      <span className="text-[10px] font-semibold">
+                        {lang === 'ar' ? 'إضافة' : 'Ajouter'}
+                      </span>
+                    </button>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPhotoPreview(null);
-                      setPhotoUrl(undefined);
-                    }}
-                    className="absolute top-2 right-2 bg-black/70 hover:bg-red-600 text-white rounded-lg px-2.5 py-1 text-xs transition"
-                  >
-                    {lang === 'ar' ? 'تغيير' : 'Changer'}
-                  </button>
                 </div>
-              ) : (
+              )}
+
+              {/* Gallery & Camera Action Buttons (visible as long as < 6 photos) */}
+              {photos.length < MAX_PHOTOS && (
                 <div className="grid grid-cols-2 gap-2.5">
-                  {/* File Upload Button */}
+                  {/* File Upload Button (supports multiple selection) */}
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="flex flex-col items-center justify-center p-3 rounded-xl border border-dashed border-[#233A3E] hover:border-[#2A9D8F] bg-[#0F1B1E]/60 text-slate-400 hover:text-white transition cursor-pointer min-h-[76px]"
+                    className="flex flex-col items-center justify-center p-3 rounded-xl border border-dashed border-[#233A3E] hover:border-[#2A9D8F] bg-[#0F1B1E]/60 text-slate-400 hover:text-white transition cursor-pointer min-h-[72px]"
                   >
                     <ImageIcon className="w-5 h-5 mb-1 text-[#2A9D8F]" />
-                    <span className="text-[11px] font-medium">{t.chooseFile}</span>
+                    <span className="text-[11px] font-medium">
+                      {photos.length > 0
+                        ? lang === 'ar'
+                          ? `إضافة صور (${MAX_PHOTOS - photos.length} متبقية)`
+                          : `Ajouter des photos (${MAX_PHOTOS - photos.length} restante${MAX_PHOTOS - photos.length > 1 ? 's' : ''})`
+                        : t.chooseFile}
+                    </span>
                   </button>
 
                   {/* Direct Camera Capture Button (phone camera) */}
                   <button
                     type="button"
                     onClick={() => cameraInputRef.current?.click()}
-                    className="flex flex-col items-center justify-center p-3 rounded-xl border border-dashed border-[#233A3E] hover:border-[#D4A34A] bg-[#0F1B1E]/60 text-slate-400 hover:text-white transition cursor-pointer min-h-[76px]"
+                    className="flex flex-col items-center justify-center p-3 rounded-xl border border-dashed border-[#233A3E] hover:border-[#D4A34A] bg-[#0F1B1E]/60 text-slate-400 hover:text-white transition cursor-pointer min-h-[72px]"
                   >
                     <Camera className="w-5 h-5 mb-1 text-[#D4A34A]" />
                     <span className="text-[11px] font-medium">{t.takePhoto}</span>
@@ -445,6 +605,7 @@ export const ProductForm: React.FC<ProductFormProps> = ({
                 ref={fileInputRef}
                 type="file"
                 accept="image/*"
+                multiple
                 onChange={handleFileChange}
                 className="hidden"
               />
@@ -468,7 +629,7 @@ export const ProductForm: React.FC<ProductFormProps> = ({
                 {isUploadingPhoto ? (
                   <>
                     <Loader2 className="w-4 h-4 text-slate-950 animate-spin" />
-                    <span>{lang === 'ar' ? 'جاري رفع الصورة...' : 'Envoi de la photo...'}</span>
+                    <span>{lang === 'ar' ? 'جاري رفع الصور...' : 'Envoi des photos...'}</span>
                   </>
                 ) : (
                   <>

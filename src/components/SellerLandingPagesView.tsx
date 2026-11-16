@@ -38,6 +38,7 @@ import {
 import { PublicLandingPage, LandingPageOrder, OrderStatus, User, SupportedCarrier, SellerCarrierSettings } from '../types';
 import { ALGERIAN_WILAYAS } from '../lib/wilayas';
 import { formatWhatsAppNumber, buildWhatsAppChatUrl, formatPhoneDisplay, isValidPhoneNumber } from '../lib/whatsapp';
+import { buildPublicLandingPageUrl, getPublicShareOrigin } from '../lib/landingPageThemes';
 
 export const SUPABASE_RLS_FIX_SQL = `-- WinDZ : Correction récursion infinie RLS sur profiles (Erreur 42P17)
 -- À coller et exécuter dans l'éditeur SQL de votre tableau de bord Supabase :
@@ -204,7 +205,7 @@ export const SellerLandingPagesView: React.FC<SellerLandingPagesViewProps> = ({
     }
   };
 
-  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://windz.app';
+  const origin = getPublicShareOrigin();
 
   // Synchronize Settings when selectedPage changes
   useEffect(() => {
@@ -907,7 +908,7 @@ export const SellerLandingPagesView: React.FC<SellerLandingPagesViewProps> = ({
 
   const handleCopyLink = (slug: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    const url = `${origin}/p/${slug}`;
+    const url = buildPublicLandingPageUrl(slug);
     navigator.clipboard.writeText(url);
     setCopiedSlug(slug);
     setTimeout(() => setCopiedSlug(null), 2500);
@@ -1599,7 +1600,7 @@ export const SellerLandingPagesView: React.FC<SellerLandingPagesViewProps> = ({
                   <span>{isAr ? 'معاينة رسالة الزبون التلقائية عند النقر على الزر :' : 'Message pré-rempli envoyé par le client au clic :'}</span>
                 </div>
                 <div className="italic text-slate-300 font-sans text-xs bg-black/40 p-2.5 rounded-lg border border-white/5">
-                  "Bonjour, je suis intéressé(e) par <strong className="text-white">{selectedPage.productName}</strong> à <strong className="text-[#D4A34A]">{(selectedPage.targetPriceDZD || selectedPage.price_dzd || 3500).toLocaleString()} DZD</strong>. Voici le lien de la page : <span className="text-emerald-400 underline">{origin}/p/{selectedPage.slug}</span>"
+                  "Bonjour, je suis intéressé(e) par <strong className="text-white">{selectedPage.productName}</strong> à <strong className="text-[#D4A34A]">{(selectedPage.targetPriceDZD || selectedPage.price_dzd || 3500).toLocaleString()} DZD</strong>. Voici le lien de la page : <span className="text-emerald-400 underline">{buildPublicLandingPageUrl(selectedPage.slug)}</span>"
                 </div>
               </div>
             )}

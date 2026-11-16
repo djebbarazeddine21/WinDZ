@@ -16,6 +16,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { PublicLandingPage } from '../types';
+import { buildPublicLandingPageUrl } from '../lib/landingPageThemes';
 
 interface GeneratedLandingPageResultViewProps {
   page: PublicLandingPage;
@@ -35,8 +36,7 @@ export const GeneratedLandingPageResultView: React.FC<GeneratedLandingPageResult
   const [copied, setCopied] = useState(false);
   const isAr = lang === 'ar';
 
-  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://windz.app';
-  const publicUrl = `${origin}/p/${page.slug}`;
+  const publicUrl = buildPublicLandingPageUrl(page.slug);
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(publicUrl);
@@ -101,17 +101,23 @@ export const GeneratedLandingPageResultView: React.FC<GeneratedLandingPageResult
           <div className="flex items-center justify-between text-xs text-slate-400">
             <span className="font-semibold text-slate-300 flex items-center gap-1.5">
               <Globe className="w-3.5 h-3.5 text-[#D4A34A]" />
-              <span>{isAr ? 'الرابط العام لصفحة الهبوط (بدون تسجيل دخول) :' : 'Lien public direct (accessible sans connexion) :'}</span>
+              <span>{isAr ? 'الرابط العام لصفحة الهبوط (بدون تسجيل دخول) :' : 'Lien public partageable (accessible sans connexion) :'}</span>
             </span>
             <span className="text-[11px] text-emerald-400 font-mono font-medium">
-              /p/{page.slug}
+              /?p={page.slug}
             </span>
           </div>
 
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
-            <div className="flex-1 bg-[#152428] border border-[#233A3E] px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-mono text-[#D4A34A] truncate select-all">
-              {publicUrl}
-            </div>
+            <button
+              type="button"
+              onClick={() => onOpenPublicPage(page)}
+              title={isAr ? 'انقر لفتح ومعاينة صفحة البيع مباشرة' : 'Cliquer pour ouvrir et tester la landing page directement'}
+              className="flex-1 text-left bg-[#152428] hover:bg-[#1B2E33] border border-[#233A3E] hover:border-[#D4A34A]/60 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-mono text-[#D4A34A] truncate cursor-pointer transition flex items-center justify-between gap-2"
+            >
+              <span className="truncate">{publicUrl}</span>
+              <ExternalLink className="w-3.5 h-3.5 shrink-0 text-[#2A9D8F]" />
+            </button>
 
             <div className="flex flex-wrap items-center gap-2">
               <button
@@ -135,10 +141,10 @@ export const GeneratedLandingPageResultView: React.FC<GeneratedLandingPageResult
                 id="btn-preview-landing-page"
                 onClick={() => onOpenPublicPage(page)}
                 className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#2A9D8F] to-[#21867a] hover:brightness-110 text-white font-bold text-xs transition shadow flex items-center justify-center gap-1.5 cursor-pointer active:scale-95"
-                title={isAr ? 'معاينة صفحة الهبوط وتجربة نموذج الطلب 58 ولاية' : 'Tester la page et le formulaire 58 wilayas'}
+                title={isAr ? 'معاينة صفحة الهبوط وتجربة نموذج الطلب 58 ولاية' : 'Ouvrir et tester la page avec le formulaire 58 wilayas'}
               >
-                <ExternalLink className="w-4 h-4 text-white" />
-                <span>{isAr ? 'معاينة وتجربة الصفحة' : 'Tester la page'}</span>
+                <Eye className="w-4 h-4 text-white" />
+                <span>{isAr ? 'فتح وتجربة الصفحة الآن' : 'Ouvrir & Tester la page'}</span>
               </button>
             </div>
           </div>
@@ -147,21 +153,15 @@ export const GeneratedLandingPageResultView: React.FC<GeneratedLandingPageResult
             <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-[#2A9D8F]" />
             <div>
               <strong className="font-semibold block mb-0.5 text-white">
-                {isAr ? '✅ رابط صفحتك جاهز ومفعل :' : '✅ Lien de votre landing page actif :'}
+                {isAr ? '✅ رابط المشاركة العام مفعّل (بدون خطأ 403) :' : '✅ Lien public corrigé (compatible partage externe sans erreur 403) :'}
               </strong>
               <span>
                 {isAr
-                  ? 'اضغط على «معاينة وتجربة الصفحة» لتجربة الصفحة مباشرة، أو انسخ الرابط واستخدمه في حملاتك الإعلانية على فيسبوك وتيك توك.'
-                  : 'Cliquez sur « Tester la page » pour l\'essayer directement, ou copiez l\'URL pour l\'utiliser dans vos campagnes TikTok Ads et Facebook Ads.'}
+                  ? 'اضغط على «فتح وتجربة الصفحة الآن» أو على الرابط أعلاه لمعاينة صفحتك فوراً، أو انسخ الرابط لاستخدامه في إعلاناتك. (ملاحظة: في بيئة AI Studio، تأكد من تفعيل مشاركة التطبيق Public Share إذا أردت فتح الرابط من متصفح آخر غير مسجل).'
+                  : 'Cliquez directement sur « Ouvrir & Tester la page » (ou sur le lien ci-dessus) pour ouvrir votre landing page immédiatement. Le lien copié utilise automatiquement l\'URL publique partagée (ais-pre / ?p=...) au lieu de l\'URL interne de développement (ais-dev) qui bloquait l\'accès avec l\'erreur 403.'}
               </span>
             </div>
           </div>
-
-          <p className="text-[11px] text-slate-400 leading-relaxed">
-            {isAr
-              ? 'انسخ هذا الرابط والصقه مباشرة في حملاتك الإعلانية على تيك توك، فيسبوك، أو إنستغرام لتبدأ باستقبال الطلبات فوراً.'
-              : 'Collez ce lien dans vos campagnes publicitaires TikTok Ads ou Facebook Ads pour diriger vos clients vers ce tunnel d\'achat rapide.'}
-          </p>
         </div>
 
         {/* Dashboard Preview Section (Aperçu dans le Dashboard) */}

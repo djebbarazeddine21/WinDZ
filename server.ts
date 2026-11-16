@@ -4,6 +4,8 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
+import { GoogleGenAI, Type } from '@google/genai';
+import { createClient } from '@supabase/supabase-js';
 import {
   supabaseServer,
   verifySupabaseToken,
@@ -12,6 +14,19 @@ import {
   SUPABASE_URL,
   SUPABASE_ANON_KEY,
 } from './server/supabase';
+
+function getGenAIClient(): GoogleGenAI | null {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return null;
+  return new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+}
 
 const app = express();
 const PORT = 3000;
@@ -134,6 +149,7 @@ interface DBProductAnalysis {
   category: string;
   targetPriceDZD: number;
   photoUrl?: string;
+  photoUrls?: string[];
   score: number;
   verdict: 'excellent' | 'correct' | 'revoir';
   demandeEstimee: 'Faible' | 'Modérée' | 'Élevée';
@@ -866,10 +882,393 @@ app.post('/api/upload', async (req, res) => {
 });
 
 // ==========================================
-// Note: Product analysis is handled 100% by the Supabase Edge Function:
-// https://wyvxxsrlnnlajscvqofy.supabase.co/functions/v1/analyser-produit
-// All direct Gemini API calls and internal analysis engines have been completely removed.
+// SERVER-SIDE GEMINI PRODUCT ANALYSIS ENGINE
+// Uses @google/genai SDK (gemini-3.8-flash -> gemini-3.1-flash-lite)
+// and persists directly into Supabase 'analyses' table
 // ==========================================
+
+async function extractInlineImagePart(photoUrl?: string): Promise<{ inlineData: { mimeType: string; data: string } } | null> {
+  if (!photoUrl || typeof photoUrl !== 'string') return null;
+  const trimmed = photoUrl.trim();
+  if (!trimmed) return null;
+
+  try {
+    if (trimmed.startsWith('data:image/')) {
+      const match = trimmed.match(/^data:(image\/[a-zA-Z0-9+.-]+)(?:;[a-zA-Z0-9=]+)*;base64,([A-Za-z0-9+/= \r\n]+)$/);
+      if (match) {
+        return {
+          inlineData: {
+            mimeType: match[1],
+            data: match[2].replace(/\s/g, ''),
+          },
+        };
+      }
+    } else if (trimmed.startsWith('/uploads/')) {
+      const localPath = path.join(process.cwd(), 'public', trimmed);
+      if (fs.existsSync(localPath)) {
+        const buf = fs.readFileSync(localPath);
+        const ext = path.extname(localPath).toLowerCase();
+        const mimeType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+        return {
+          inlineData: {
+            mimeType,
+            data: buf.toString('base64'),
+          },
+        };
+      }
+    } else if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4500);
+      const imgRes = await fetch(trimmed, { signal: controller.signal });
+      clearTimeout(timeout);
+      if (imgRes.ok) {
+        const contentType = imgRes.headers.get('content-type') || 'image/jpeg';
+        const arrayBuf = await imgRes.arrayBuffer();
+        return {
+          inlineData: {
+            mimeType: contentType.split(';')[0].trim() || 'image/jpeg',
+            data: Buffer.from(arrayBuf).toString('base64'),
+          },
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('[GeminiAnalysis] Image inline extraction note:', (err as any)?.message || err);
+  }
+  return null;
+}
+
+function buildFallbackAnalysisResult(
+  productName: string,
+  category: string,
+  targetPriceDZD: number,
+  lang: string
+) {
+  const catProfile = db.settings.categoryProfiles?.[category] || {
+    baseDemandScore: 76,
+    avgCompetition: 'Modérée',
+    adviceTip: 'Mettez en avant le paiement à la livraison (COD) et la livraison rapide 58 wilayas.',
+  };
+
+  let priceFactor = 0;
+  if (targetPriceDZD >= 2200 && targetPriceDZD <= 5800) {
+    priceFactor = 6;
+  } else if (targetPriceDZD > 9500) {
+    priceFactor = -8;
+  } else if (targetPriceDZD < 1500) {
+    priceFactor = -5;
+  }
+
+  const score = Math.max(35, Math.min(94, Math.round(catProfile.baseDemandScore + priceFactor)));
+  const verdict: 'excellent' | 'correct' | 'revoir' =
+    score >= 70 ? 'excellent' : score < 45 ? 'revoir' : 'correct';
+  const demandeEstimee: 'Faible' | 'Modérée' | 'Élevée' =
+    score >= 72 ? 'Élevée' : score >= 48 ? 'Modérée' : 'Faible';
+  const niveauConcurrence: 'Faible' | 'Modérée' | 'Élevée' =
+    (['Faible', 'Modérée', 'Élevée'].includes(catProfile.avgCompetition)
+      ? catProfile.avgCompetition
+      : 'Modérée') as 'Faible' | 'Modérée' | 'Élevée';
+
+  const prixMin = Math.max(500, Math.round((targetPriceDZD * 0.85) / 100) * 100);
+  const prixMax = Math.max(prixMin + 400, Math.round((targetPriceDZD * 1.15) / 100) * 100);
+
+  const isAr = lang === 'ar' || /[\u0600-\u06FF]/.test(productName);
+  const conseil = isAr
+    ? `منتج "${productName}" في فئة ${category} بسعر ${targetPriceDZD} د.ج يتمتع بفرصة جيدة في السوق الجزائري. ركّز على فيديوهات UGC حقيقية في تيك توك وفيسبوك مع ميزة الدفع عند الاستلام (COD) والتوصيل السريع لـ 58 ولاية عبر Yalidine أو ZR Express.`
+    : `Le produit "${productName}" (${category}) positionné à ${targetPriceDZD.toLocaleString()} DZD présente un bon potentiel sur le marché algérien. ${catProfile.adviceTip} Privilégiez des vidéos courtes de démonstration sur TikTok/Facebook Ads avec vérification du colis avant paiement (COD 58 wilayas).`;
+
+  const accroches = isAr
+    ? [
+        `🔥 أخيراً في الجزائر: ${productName} بجودة عالية والدفع عند الاستلام بعد فحص الطرد!`,
+        `🇩🇿 توصيل سريع لـ 58 ولاية — اطلب ${productName} اليوم واستفد من العرض الحصري!`,
+        `✨ الحل العملي الذي يبحث عنه الجميع: ${productName} متوفر بكمية محدودة وبسعر خاص!`,
+      ]
+    : [
+        `🔥 Enfin disponible en Algérie : ${productName} avec paiement à la livraison après vérification du colis !`,
+        `🇩🇿 Livraison rapide 58 Wilayas — Commandez votre ${productName} aujourd'hui et profitez de l'offre spéciale !`,
+        `✨ La qualité supérieure au meilleur prix : ${productName} satisfait ou échangé partout en Algérie.`,
+      ];
+
+  return {
+    score,
+    verdict,
+    demande_estimee: demandeEstimee,
+    niveau_concurrence: niveauConcurrence,
+    prix_min: prixMin,
+    prix_max: prixMax,
+    conseil,
+    accroches,
+    grounding_sources: [] as { title: string; url: string }[],
+  };
+}
+
+app.post('/api/products/analyze', authMiddleware, analyzeRateLimiter, async (req, res) => {
+  try {
+    const user = (req as any).user as DBUser;
+    const authHeader = req.headers.authorization || '';
+    const bearerToken = authHeader.replace(/^Bearer\s+/i, '').trim();
+
+    const rawName = req.body?.productName || req.body?.nom_produit || '';
+    const productName = sanitizeInput(String(rawName));
+    const category = String(req.body?.category || req.body?.categorie || 'Autre').trim();
+    const targetPriceDZD = Number(req.body?.targetPriceDZD ?? req.body?.prix ?? 0);
+    const rawPhotoUrls = req.body?.photoUrls || req.body?.photo_urls;
+    const photoUrlsList: string[] = Array.isArray(rawPhotoUrls)
+      ? rawPhotoUrls.map((u: any) => (typeof u === 'string' ? u.trim() : '')).filter(Boolean).slice(0, 6)
+      : [];
+    const photoUrl = req.body?.photoUrl || req.body?.photo_url || photoUrlsList[0] || undefined;
+    if (photoUrl && photoUrlsList.length === 0) {
+      photoUrlsList.push(String(photoUrl).trim());
+    }
+    const lang = String(req.body?.lang || req.body?.langue || 'fr').toLowerCase() === 'ar' ? 'ar' : 'fr';
+
+    if (!productName) {
+      return res.status(400).json({ error: 'Le nom du produit est requis.' });
+    }
+    if (!targetPriceDZD || targetPriceDZD <= 0) {
+      return res.status(400).json({ error: 'Un prix cible valide en DZD est requis.' });
+    }
+
+    // Check monthly quota for non-admin users
+    const maxLimit = user.role === 'admin'
+      ? 200
+      : (user.analysesLimit || (user.subscriptionTier === 'pro' ? 200 : user.subscriptionTier === 'basic' ? 30 : 1));
+    const currentUsed = user.analysesUsedThisMonth || 0;
+
+    if (user.role !== 'admin' && currentUsed >= maxLimit) {
+      return res.status(403).json({
+        error:
+          lang === 'ar'
+            ? 'لقد استنفدت رصيدك من التحليلات لهذا الشهر. يرجى الترقية إلى باقة أعلى أو الانتظار حتى الشهر القادم.'
+            : "Vous avez atteint votre quota d'analyses pour ce mois. Veuillez passer à un palier supérieur ou attendre le mois prochain.",
+        code: 'QUOTA_EXCEEDED',
+        quota_atteint: true,
+        analyses_restantes: 0,
+      });
+    }
+
+    const ai = getGenAIClient();
+    let resultData: {
+      score: number;
+      verdict: 'excellent' | 'correct' | 'revoir';
+      demande_estimee: 'Faible' | 'Modérée' | 'Élevée';
+      niveau_concurrence: 'Faible' | 'Modérée' | 'Élevée';
+      prix_min: number;
+      prix_max: number;
+      conseil: string;
+      accroches: string[];
+      grounding_sources: { title: string; url: string }[];
+    } | null = null;
+
+    if (ai) {
+      const isAr = lang === 'ar';
+      const extractedParts = await Promise.all(
+        photoUrlsList.slice(0, 6).map((u) => extractInlineImagePart(u))
+      );
+      const validImageParts = extractedParts.filter(
+        (p): p is { inlineData: { mimeType: string; data: string } } => p !== null
+      );
+
+      const promptText = `Tu es un expert senior en e-commerce et marketing digital en Algérie (marché COD - Paiement à la livraison, 58 wilayas, Ouedkniss, Facebook/Instagram/TikTok Ads DZ, logistique Yalidine / ZR Express / Kazi Tour).
+Analyse le potentiel commercial de ce produit avant le lancement d'une campagne publicitaire :
+- Produit : "${productName}"
+- Catégorie : "${category}"
+- Prix de vente prévu : ${targetPriceDZD} DZD
+${validImageParts.length > 0 ? `- ${validImageParts.length} photo(s) du produit sont jointes pour évaluer son attractivité visuelle et sa qualité perçue sous différents angles.` : ''}
+
+Réponds UNIQUEMENT avec un objet JSON strict respectant ce schéma :
+- score : entier entre 15 et 96 évaluant le potentiel global en Algérie
+- verdict : "excellent" (si score >= 70), "correct" (si score entre 45 et 69), ou "revoir" (si score < 45)
+- demande_estimee : "Faible", "Modérée", ou "Élevée"
+- niveau_concurrence : "Faible", "Modérée", ou "Élevée"
+- prix_min : prix minimum psychologique recommandé en DZD (entier multiple de 100)
+- prix_max : prix maximum recommandé en DZD (entier multiple de 100)
+- conseil : conseil stratégique détaillé et concret en ${isAr ? 'arabe (العربية)' : 'français'} adapté au marché algérien (marge nette après retour COD, angle créatif TikTok/Facebook, offre pack/livraison)
+- accroches : tableau de 3 accroches publicitaires percutantes en ${isAr ? 'arabe (العربية) avec quelques expressions algériennes naturelles' : 'français adapté aux acheteurs algériens'} prêtes pour TikTok/Facebook Ads`;
+
+      const contentsPayload: any = validImageParts.length > 0
+        ? { parts: [...validImageParts, { text: promptText }] }
+        : promptText;
+
+      const responseSchema = {
+        type: Type.OBJECT,
+        properties: {
+          score: { type: Type.INTEGER },
+          verdict: { type: Type.STRING },
+          demande_estimee: { type: Type.STRING },
+          niveau_concurrence: { type: Type.STRING },
+          prix_min: { type: Type.INTEGER },
+          prix_max: { type: Type.INTEGER },
+          conseil: { type: Type.STRING },
+          accroches: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+          },
+        },
+        required: [
+          'score',
+          'verdict',
+          'demande_estimee',
+          'niveau_concurrence',
+          'prix_min',
+          'prix_max',
+          'conseil',
+          'accroches',
+        ],
+      };
+
+      const modelsToTry = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
+      for (const modelName of modelsToTry) {
+        try {
+          const response = await ai.models.generateContent({
+            model: modelName,
+            contents: contentsPayload,
+            config: {
+              responseMimeType: 'application/json',
+              responseSchema,
+              temperature: 0.4,
+            },
+          });
+
+          const rawText = (response.text || '').trim();
+          const cleanedJson = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+          const parsed = JSON.parse(cleanedJson);
+
+          if (parsed && typeof parsed === 'object') {
+            const rawScore = Math.max(15, Math.min(98, Math.round(Number(parsed.score) || 70)));
+            const normVerdict: 'excellent' | 'correct' | 'revoir' =
+              rawScore >= 70 ? 'excellent' : rawScore < 45 ? 'revoir' : 'correct';
+
+            const normalizeLevel = (val: any): 'Faible' | 'Modérée' | 'Élevée' => {
+              const s = String(val || '').toLowerCase();
+              if (s.includes('faible') || s.includes('low') || s.includes('ضعيف')) return 'Faible';
+              if (s.includes('élev') || s.includes('elev') || s.includes('high') || s.includes('مرتفع') || s.includes('عال')) return 'Élevée';
+              return 'Modérée';
+            };
+
+            const pMin = Math.max(300, Math.round((Number(parsed.prix_min) || targetPriceDZD * 0.85) / 100) * 100);
+            const pMax = Math.max(pMin + 300, Math.round((Number(parsed.prix_max) || targetPriceDZD * 1.15) / 100) * 100);
+
+            resultData = {
+              score: rawScore,
+              verdict: normVerdict,
+              demande_estimee: normalizeLevel(parsed.demande_estimee),
+              niveau_concurrence: normalizeLevel(parsed.niveau_concurrence),
+              prix_min: pMin,
+              prix_max: pMax,
+              conseil: String(parsed.conseil || '').trim() || 'Mettez en avant la livraison rapide 58 wilayas et le paiement à la réception.',
+              accroches: Array.isArray(parsed.accroches) && parsed.accroches.length > 0
+                ? parsed.accroches.map((a: any) => String(a)).slice(0, 4)
+                : [],
+              grounding_sources: [],
+            };
+            break;
+          }
+        } catch (gemErr: any) {
+          console.warn(`[GeminiAnalysis] Modèle ${modelName} indisponible:`, gemErr?.message || gemErr);
+        }
+      }
+    }
+
+    if (!resultData) {
+      resultData = buildFallbackAnalysisResult(productName, category, targetPriceDZD, lang);
+    }
+
+    const analysisId = crypto.randomUUID();
+    const createdAt = new Date().toISOString();
+
+    // Update user quota in local DB
+    user.analysesUsedThisMonth = (user.analysesUsedThisMonth || 0) + 1;
+    const remainingQuota = Math.max(0, maxLimit - user.analysesUsedThisMonth);
+
+    const dbRecord: DBProductAnalysis = {
+      id: analysisId,
+      userId: user.id,
+      userEmail: user.email,
+      productName,
+      category,
+      targetPriceDZD,
+      photoUrl: photoUrl || undefined,
+      photoUrls: photoUrlsList.length > 0 ? photoUrlsList : undefined,
+      score: resultData.score,
+      verdict: resultData.verdict,
+      demandeEstimee: resultData.demande_estimee,
+      niveauConcurrence: resultData.niveau_concurrence,
+      prixMin: resultData.prix_min,
+      prixMax: resultData.prix_max,
+      conseil: resultData.conseil,
+      accroches: resultData.accroches,
+      groundingSources: resultData.grounding_sources,
+      createdAt,
+    };
+
+    db.analyses.unshift(dbRecord);
+    saveDB(db);
+
+    // Persist directly into Supabase 'analyses' table using the user's authenticated JWT
+    if (bearerToken && bearerToken.startsWith('ey')) {
+      try {
+        const userSbClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+          auth: { persistSession: false, autoRefreshToken: false },
+          global: {
+            headers: {
+              Authorization: `Bearer ${bearerToken}`,
+            },
+          },
+        });
+        await userSbClient.from('analyses').upsert([
+          {
+            id: analysisId,
+            user_id: user.id,
+            product_name: productName,
+            category,
+            target_price_dzd: targetPriceDZD,
+            photo_url: photoUrl || null,
+            score: resultData.score,
+            verdict: resultData.verdict,
+            demande_estimee: resultData.demande_estimee,
+            niveau_concurrence: resultData.niveau_concurrence,
+            prix_min: resultData.prix_min,
+            prix_max: resultData.prix_max,
+            conseil: resultData.conseil,
+            accroches: resultData.accroches,
+            grounding_sources: resultData.grounding_sources,
+            created_at: createdAt,
+          },
+        ]);
+      } catch (sbInsertErr: any) {
+        console.warn('[GeminiAnalysis] Supabase insert note:', sbInsertErr?.message || sbInsertErr);
+      }
+    }
+
+    return res.json({
+      id: analysisId,
+      user_id: user.id,
+      nom_produit: productName,
+      categorie: category,
+      prix: targetPriceDZD,
+      photo_url: photoUrl || null,
+      photo_urls: photoUrlsList,
+      score: resultData.score,
+      verdict: resultData.verdict,
+      demande_estimee: resultData.demande_estimee,
+      niveau_concurrence: resultData.niveau_concurrence,
+      prix_min: resultData.prix_min,
+      prix_max: resultData.prix_max,
+      conseil: resultData.conseil,
+      accroches: resultData.accroches,
+      grounding_sources: resultData.grounding_sources,
+      created_at: createdAt,
+      analyses_utilisees: user.analysesUsedThisMonth,
+      analyses_restantes: remainingQuota,
+    });
+  } catch (err: any) {
+    console.error('[GeminiAnalysis] Erreur inattendue:', err);
+    return res.status(500).json({
+      error: err?.message || "Erreur lors de l'analyse du produit",
+    });
+  }
+});
 
 app.post('/api/user/sync-quota', authMiddleware, (req, res) => {
   const user = (req as any).user as DBUser;
@@ -919,10 +1318,13 @@ app.get('/api/products', authMiddleware, (req, res) => {
     userAnalyses = userAnalyses.slice(0, 30);
   }
 
-  // Ensure photoUrl is normalized and populated on every analysis object
+  // Ensure photoUrl and photoUrls are normalized and populated on every analysis object
   const normalizedAnalyses = userAnalyses.map((a) => ({
     ...a,
     photoUrl: a.photoUrl || (a as any).photo_url || null,
+    photoUrls: Array.isArray(a.photoUrls) && a.photoUrls.length > 0
+      ? a.photoUrls
+      : (a.photoUrl || (a as any).photo_url ? [a.photoUrl || (a as any).photo_url] : []),
   }));
 
   res.json({
@@ -1089,18 +1491,242 @@ app.post('/api/landing-pages/:slug/order', (req, res) => {
   res.json({ success: true, orderId, message: 'Commande enregistrée avec succès' });
 });
 
-// Generate landing page
-app.post('/api/landing-pages/generate', (req, res) => {
+// Helper to build rich product-and-category tailored copywriting (FR + AR) if AI is offline
+function buildTailoredLandingPageCopy(
+  productName: string,
+  category: string,
+  unitPrice: number,
+  accroches?: string[],
+  conseil?: string
+) {
+  const cleanHook =
+    Array.isArray(accroches) && accroches.length > 0
+      ? String(accroches[0]).replace(/^[🔥⚡⭐🇩🇿✨\s]+/, '').trim()
+      : '';
+  const hasArabicName = /[\u0600-\u06FF]/.test(productName);
+  const hasArabicHook = Boolean(cleanHook && /[\u0600-\u06FF]/.test(cleanHook));
+  const hasArabicConseil = Boolean(conseil && /[\u0600-\u06FF]/.test(conseil));
+
+  const frHeadline =
+    cleanHook && !hasArabicHook
+      ? cleanHook
+      : `${productName} — La Référence ${category || 'Qualité'} en Algérie`;
+
+  const arHeadline =
+    cleanHook && hasArabicHook
+      ? cleanHook
+      : `${productName} — الاختيار الأول في فئة ${category || 'الجودة'} بالجزائر`;
+
+  const frSubheadline =
+    conseil && !hasArabicConseil
+      ? conseil
+      : `Découvrez ${productName}, conçu pour vous offrir performance, confort et durabilité au quotidien. Livraison rapide 58 wilayas et paiement à la livraison après vérification du colis.`;
+
+  const arSubheadline =
+    conseil && hasArabicConseil
+      ? conseil
+      : `اكتشف ${productName} المصمم ليمنحك الأداء العملي، المتانة والراحة اليومية. توصيل سريع لـ 58 ولاية والدفع عند الاستلام بعد فحص ومعاينة الطرد.`;
+
+  const frDescription = `Pensé dans les moindres détails pour la catégorie ${category || 'E-commerce'}, ${productName} se distingue par la qualité de sa conception, ses finitions soignées conformes aux photos et sa prise en main immédiate. Que ce soit pour un usage quotidien intensif ou pour offrir, il répond aux attentes des acheteurs algériens les plus exigeants avec une garantie de vérification à la réception.`;
+
+  const arDescription = `تم تصميم ${productName} بعناية فائقة ليلبي احتياجاتك اليومية بأعلى معايير الجودة والعملية، مع تصميم أنيق مطابق تماماً للصور المعروضة. يجمع هذا المنتج بين المتانة وسهولة الاستخدام ليمنحك نتيجة فورية ومضمونة، مع إمكانية فتح ومعاينة الطرد أمام عون التوصيل قبل الدفع.`;
+
+  const frBenefits = [
+    {
+      title: `Conception & Finitions de ${productName}`,
+      description: `Fabriqué avec des matériaux sélectionnés pour leur solidité et leur esthétique fidèle aux photos du produit.`,
+      icon: 'Sparkles',
+    },
+    {
+      title: 'Performance & Confort au Quotidien',
+      description: `Utilisation intuitive et résultats immédiats dès la première prise en main de votre ${productName}.`,
+      icon: 'Zap',
+    },
+    {
+      title: 'Vérification du Colis Avant Paiement',
+      description: `Ouvrez votre colis et contrôlez votre ${productName} en présence du livreur avant de payer en espèces (COD).`,
+      icon: 'CheckCircle2',
+    },
+    {
+      title: 'Expédition Express 58 Wilayas',
+      description: `Livraison rapide en 24h/48h à domicile ou en bureau stop-desk partout en Algérie avec suivi téléphonique.`,
+      icon: 'Truck',
+    },
+  ];
+
+  const arBenefits = [
+    {
+      title: `تصميم متقن وجودة عالية لـ ${productName}`,
+      description: `مصنوع من خامات متينة وعالية الجودة مطابقة تماماً لتفاصيل الصور المعروضة للمنتج.`,
+      icon: 'Sparkles',
+    },
+    {
+      title: 'فعالية وسهولة في الاستخدام اليومي',
+      description: `يمنحك ${productName} تجربة مريحة ونتيجة عملية فورية منذ أول استخدام دون أي تعقيد.`,
+      icon: 'Zap',
+    },
+    {
+      title: 'معاينة وفحص المنتج قبل الدفع',
+      description: `افتح طردك وتأكد بنفسك من جودة ${productName} ومطابقته للصور أمام الموزع قبل دفع المبلغ.`,
+      icon: 'CheckCircle2',
+    },
+    {
+      title: 'توصيل سريع لـ 58 ولاية جزائرية',
+      description: `شحن سريع خلال 24 إلى 48 ساعة إلى باب المنزل أو مكتب التوصيل مع اتصال هاتفي للتأكيد.`,
+      icon: 'Truck',
+    },
+  ];
+
+  const frFeatures = [
+    `Modèle original : ${productName} vérifié et contrôlé avant expédition`,
+    `Design, couleurs et finitions 100% conformes aux photos réelles`,
+    `Matériaux résistants adaptés à une utilisation durable (${category || 'Usage quotidien'})`,
+    `Prise en main ergonomique, entretien simple et rapide`,
+    `Emballage antichoc sécurisé pour le transport vers les 58 wilayas`,
+    `Garantie satisfaction : échange immédiat en cas de défaut constaté`,
+  ];
+
+  const arFeatures = [
+    `المنتج الأصلي: ${productName} مفحوص ومراقب بدقة قبل الشحن`,
+    `الشكل، الألوان والتفاصيل مطابقة 100% للصور الحقيقية المعروضة`,
+    `خامات متينة ومقاومة مصممة للاستخدام اليومي الطويل (${category || 'جودة عالية'})`,
+    `تصميم عملي مريح وسهل التنظيف والاستعمال الفوري`,
+    `تغليف محمي ومقوى ضد الصدمات لضمان وصول الطرد في حالة ممتازة`,
+    `ضمان الرضا التام: استبدال فوري في حال وجود أي عيب مصنعي`,
+  ];
+
+  const frTestimonials = [
+    {
+      author: 'Amine K.',
+      city: 'Alger',
+      rating: 5,
+      comment: `J'ai reçu mon ${productName} en 24h ! Il est exactement comme sur la photo, la qualité est bluffante et j'ai pu vérifier le colis avant de payer.`,
+      verified: true,
+    },
+    {
+      author: 'Sarah B.',
+      city: 'Oran',
+      rating: 5,
+      comment: `Très satisfaite de mon achat (${productName}). Super pratique au quotidien, finitions impeccables et livreur très courtois.`,
+      verified: true,
+    },
+    {
+      author: 'Walid M.',
+      city: 'Constantine',
+      rating: 5,
+      comment: `Rapport qualité/prix imbattable à ${unitPrice.toLocaleString()} DZD pour ce ${productName}. Je recommande les yeux fermés !`,
+      verified: true,
+    },
+  ];
+
+  const arTestimonials = [
+    {
+      author: 'أمين ك.',
+      city: 'الجزائر العاصمة',
+      rating: 5,
+      comment: `استلمت ${productName} في 24 ساعة فقط! المنتج مطابق تماماً للصور وجودته ممتازة، فتحت الطرد وتأكدت منه قبل الدفع.`,
+      verified: true,
+    },
+    {
+      author: 'سارة ب.',
+      city: 'وهران',
+      rating: 5,
+      comment: `جد راضية بطلب ${productName}. عملي جداً في الاستعمال اليومي وتفاصيله متقنة كما في الصورة تماماً.`,
+      verified: true,
+    },
+    {
+      author: 'وليد م.',
+      city: 'قسنطينة',
+      rating: 5,
+      comment: `أفضل سعر (${unitPrice} دج) مقابل هذه الجودة لمنتج ${productName}. تعامل احترافي وتوصيل سريع.`,
+      verified: true,
+    },
+  ];
+
+  const frFaq = [
+    {
+      question: `Le produit ${productName} reçu est-il exactement identique aux photos ?`,
+      answer: `Oui, 100% identique. Les photos présentent fidèlement le modèle réel de ${productName}, et vous pouvez ouvrir le colis pour le vérifier vous-même avant de payer.`,
+    },
+    {
+      question: `Pourquoi choisir ce modèle de ${productName} ?`,
+      answer: `Il a été sélectionné pour sa robustesse, son efficacité dans la catégorie ${category || 'E-commerce'} et son excellent rapport qualité/prix à ${unitPrice.toLocaleString()} DZD.`,
+    },
+    {
+      question: 'Comment fonctionne la livraison dans les 58 wilayas ?',
+      answer: 'Dès validation de votre commande, notre équipe vous appelle pour confirmer, puis votre colis est expédié sous 24h à 48h à domicile ou en point relais (bureau).',
+    },
+    {
+      question: 'Comment s’effectue le paiement ?',
+      answer: 'Le paiement se fait exclusivement en espèces à la livraison (COD) après réception et contrôle de votre commande.',
+    },
+  ];
+
+  const arFaq = [
+    {
+      question: `هل المنتج ${productName} الذي سأستلمه مطابق تماماً للصور؟`,
+      answer: `نعم، مطابق بنسبة 100%. الصور المعروضة حقيقية وتبرز تفاصيل ${productName} بدقة، ويمكنك فتح الطرد ومعاينته بنفسك قبل الدفع.`,
+    },
+    {
+      question: `ما الذي يميز ${productName} عن غيره في السوق؟`,
+      answer: `يتميز بجودة خاماته العالية، فعاليته المجربة في فئة ${category || 'المنتجات العملية'} وسعره المدروس (${unitPrice} دج) مع ضمان الاستبدال.`,
+    },
+    {
+      question: 'كيف يتم التوصيل لـ 58 ولاية؟',
+      answer: 'بعد تسجيل طلبك في الاستمارة، يتصل بك فريقنا هاتفياً للتأكيد، ثم يُشحن الطرد خلال 24 إلى 48 ساعة إلى باب منزلك أو مكتب التوصيل.',
+    },
+    {
+      question: 'كيف يتم الدفع؟',
+      answer: 'الدفع يكون نقداً عند الاستلام (COD) فقط بعد وصول الطرد إليك ومعاينته.',
+    },
+  ];
+
+  return {
+    isArabicPrimary: hasArabicName,
+    fr: {
+      headline: frHeadline,
+      subheadline: frSubheadline,
+      description: frDescription,
+      badgeKicker: `🇩🇿 ${productName} • Qualité Vérifiée • Livraison 58 Wilayas`,
+      ctaText: `Commander ${productName} • Paiement à la Livraison`,
+      guaranteeBadgeText: 'Ouverture & vérification du colis avant paiement • Garantie échange',
+      deliveryInfo: 'Livraison express 24h à 48h dans les 58 wilayas',
+      benefits: frBenefits,
+      features: frFeatures,
+      testimonials: frTestimonials,
+      faq: frFaq,
+    },
+    ar: {
+      headline: arHeadline,
+      subheadline: arSubheadline,
+      description: arDescription,
+      badgeKicker: `🇩🇿 ${productName} • جودة مضمونة • توصيل لـ 58 ولاية`,
+      ctaText: `اطلب ${productName} الآن • الدفع عند الاستلام`,
+      guaranteeBadgeText: 'فتح ومعاينة الطرد قبل الدفع • ضمان الاستبدال',
+      deliveryInfo: 'توصيل سريع من 24 إلى 48 ساعة لجميع الولايات الـ 58',
+      benefits: arBenefits,
+      features: arFeatures,
+      testimonials: arTestimonials,
+      faq: arFaq,
+    },
+  };
+}
+
+// Generate landing page (enhanced with server-side multimodal Gemini AI copywriting adapted to product & photos)
+app.post('/api/landing-pages/generate', async (req, res) => {
   const {
     productName,
     category,
     targetPriceDZD,
     originalPriceDZD,
     photoUrl,
+    photoUrls,
     styleTheme,
     style_theme,
     accroches,
     conseil,
+    analysis_id,
+    lang,
   } = req.body;
 
   if (!productName || !targetPriceDZD) {
@@ -1108,7 +1734,7 @@ app.post('/api/landing-pages/generate', (req, res) => {
   }
 
   const detectedTheme = styleTheme || style_theme || detectThemeForProductServer(productName, category || 'Autre');
-  
+
   let baseSlug = (productName || '')
     .toLowerCase()
     .normalize('NFD')
@@ -1132,79 +1758,184 @@ app.post('/api/landing-pages/generate', (req, res) => {
   const unitPrice = Number(targetPriceDZD) || 3500;
   const strikePrice = Number(originalPriceDZD) || Math.round(unitPrice * 1.35);
 
-  const isArabicProduct = /[\u0600-\u06FF]/.test(productName);
-  const headline =
-    Array.isArray(accroches) && accroches.length > 0
-      ? accroches[0].replace(/^[🔥⚡⭐🇩🇿✨\s]+/, '')
-      : isArabicProduct
-      ? `اكتشف الجودة الفائقة لـ ${productName} — التوصيل متوفر لـ 58 ولاية`
-      : `L'Excellence et l'Élégance de ${productName} chez Vous`;
+  // Gather all product photos (from request body or from stored analysis in db.analyses)
+  const storedAnalysis = analysis_id ? db.analyses.find((a) => a.id === analysis_id) : undefined;
+  const rawPhotoUrls = Array.isArray(photoUrls) && photoUrls.length > 0
+    ? photoUrls
+    : Array.isArray(storedAnalysis?.photoUrls) && storedAnalysis!.photoUrls!.length > 0
+    ? storedAnalysis!.photoUrls!
+    : [];
+  const primaryPhotoUrl = photoUrl || rawPhotoUrls[0] || storedAnalysis?.photoUrl || '';
+  const allPhotosList: string[] = rawPhotoUrls.length > 0
+    ? rawPhotoUrls.filter(Boolean).slice(0, 6)
+    : primaryPhotoUrl
+    ? [primaryPhotoUrl]
+    : [];
 
-  const subheadline =
-    conseil ||
-    (isArabicProduct
-      ? 'جودة استثنائية مع شحن سريع لـ 58 ولاية وإمكانية فحص ومعاينة الطرد قبل الدفع عند الاستلام.'
-      : `Profitez d'une qualité d'exception, d'une expédition express dans les 58 wilayas d'Algérie et du paiement à la livraison après vérification de votre colis.`);
+  // Build baseline product-tailored copywriting (FR + AR)
+  const fallbackCopy = buildTailoredLandingPageCopy(
+    productName,
+    category || 'Autre',
+    unitPrice,
+    accroches || storedAnalysis?.accroches,
+    conseil || storedAnalysis?.conseil
+  );
+
+  let frCopy = { ...fallbackCopy.fr };
+  let arCopy = { ...fallbackCopy.ar };
+
+  const ai = getGenAIClient();
+  if (ai) {
+    // Extract inline image parts for up to 6 uploaded product photos so Gemini sees the exact product
+    const extractedParts = await Promise.all(
+      allPhotosList.slice(0, 6).map((u) => extractInlineImagePart(u))
+    );
+    const validImageParts = extractedParts.filter(
+      (p): p is { inlineData: { mimeType: string; data: string } } => p !== null
+    );
+
+    const lpPrompt = `Tu es un directeur artistique et copywriter e-commerce d'élite spécialisé sur le marché algérien (Paiement à la livraison COD, livraison 58 wilayas).
+Ta mission est de rédiger l'intégralité des textes d'une Landing Page de haute conversion 100% SUR-MESURE pour ce produit précis et ses photos :
+- Nom exact du produit : "${productName}"
+- Catégorie : "${category || 'Autre'}"
+- Prix de vente : ${unitPrice} DZD (Prix barré : ${strikePrice} DZD)
+${Array.isArray(accroches) && accroches.length > 0 ? `- Angles marketing identifiés : ${accroches.join(' | ')}` : ''}
+${conseil ? `- Conseil stratégique : ${conseil}` : ''}
+${validImageParts.length > 0 ? `- ${validImageParts.length} photo(s) réelle(s) du produit sont jointes : OBSERVE ATTENTIVEMENT les photos (couleurs, forme, matériaux, texture, composants, design, accessoires visibles, contexte d'utilisation) et décris ces détails visuels concrets dans toute la page.` : ''}
+
+RÈGLES ABSOLUES DE RÉDACTION :
+1. ZÉRO TEXTE GÉNÉRIQUE : Chaque titre, sous-titre, description, avantage (benefit), caractéristique technique (feature), avis client (testimonial) et question FAQ DOIT parler spécifiquement de "${productName}", de sa fonction réelle et des détails visuels observables sur la ou les photos jointes.
+2. Génère les textes complets dans les DEUX langues : "fr" (Français) et "ar" (Arabe fluide et persuasif adapté aux acheteurs algériens).
+3. Pour "fr" et pour "ar", fournis exactement cet objet :
+   - "headline" : Titre principal percutant, spécifique au produit et à son aspect visuel / bénéfice majeur (sans guillemets).
+   - "subheadline" : Sous-titre persuasif (1 à 2 phrases) mettant en avant le résultat concret qu'apporte "${productName}" + livraison 58 wilayas et paiement après vérification.
+   - "badgeKicker" : Badge court en haut de page résumant la spécificité du produit (ex: "🇩🇿 Modèle Original • [Détail visuel/matière du produit] • Livraison 58 Wilayas").
+   - "description" : Paragraphe descriptif riche (3 à 4 phrases) décrivant précisément ce qu'on voit sur la photo du produit (design, matériaux, finitions), comment il fonctionne et pourquoi il résout le besoin du client.
+   - "ctaText" : Texte du bouton d'achat engageant mentionnant le produit.
+   - "benefits" : Tableau de 4 objets { "title": string, "description": string, "icon": string } où chaque avantage détaille un point fort concret de "${productName}" et de sa conception visible sur l'image. Choisis "icon" parmi : "Sparkles", "ShieldCheck", "Zap", "Heart", "Award", "Layers", "Flame", "Gem", "Feather", "CheckCircle2", "Truck", "Clock".
+   - "features" : Tableau de 6 chaînes de caractères listant les caractéristiques techniques, visuelles et pratiques précises de "${productName}" (matière visible sur l'image, ergonomie, dimensions/usage, entretien, solidité, garantie).
+   - "testimonials" : Tableau de 3 objets { "author": string, "city": string, "rating": 5, "comment": string } d'acheteurs algériens (Alger, Oran, Constantine, Sétif, Béjaïa, Tlemcen...) qui commentent spécifiquement leur expérience avec "${productName}" et sa conformité exacte avec la photo.
+   - "faq" : Tableau de 4 objets { "question": string, "answer": string } contenant 2 questions très spécifiques sur l'utilisation, les caractéristiques ou l'entretien de "${productName}" + 2 questions sur la livraison 58 wilayas et l'ouverture du colis avant paiement.
+
+Réponds UNIQUEMENT avec un objet JSON valide de la forme : { "fr": { ... }, "ar": { ... } }.`;
+
+    const contentsPayload: any = validImageParts.length > 0
+      ? { parts: [...validImageParts, { text: lpPrompt }] }
+      : lpPrompt;
+
+    const allowedIcons = [
+      'Sparkles', 'ShieldCheck', 'Zap', 'Heart', 'Award', 'Layers',
+      'Flame', 'Gem', 'Feather', 'CheckCircle2', 'Truck', 'Clock',
+    ];
+    const fallbackIcons = ['Sparkles', 'Zap', 'ShieldCheck', 'Truck'];
+
+    const normalizeLangBlock = (block: any, fallbackBlock: typeof frCopy) => {
+      if (!block || typeof block !== 'object') return fallbackBlock;
+      return {
+        headline: String(block.headline || fallbackBlock.headline).trim(),
+        subheadline: String(block.subheadline || fallbackBlock.subheadline).trim(),
+        description: String(block.description || fallbackBlock.description).trim(),
+        badgeKicker: String(block.badgeKicker || fallbackBlock.badgeKicker).trim(),
+        ctaText: String(block.ctaText || fallbackBlock.ctaText).trim(),
+        guaranteeBadgeText: fallbackBlock.guaranteeBadgeText,
+        deliveryInfo: fallbackBlock.deliveryInfo,
+        benefits:
+          Array.isArray(block.benefits) && block.benefits.length >= 3
+            ? block.benefits.slice(0, 4).map((b: any, idx: number) => ({
+                title: String(b?.title || fallbackBlock.benefits[idx % 4].title).trim(),
+                description: String(b?.description || fallbackBlock.benefits[idx % 4].description).trim(),
+                icon: allowedIcons.includes(b?.icon) ? b.icon : fallbackIcons[idx % fallbackIcons.length],
+              }))
+            : fallbackBlock.benefits,
+        features:
+          Array.isArray(block.features) && block.features.length >= 3
+            ? block.features.slice(0, 6).map((f: any) => String(f || '').trim()).filter(Boolean)
+            : fallbackBlock.features,
+        testimonials:
+          Array.isArray(block.testimonials) && block.testimonials.length >= 2
+            ? block.testimonials.slice(0, 3).map((t: any, idx: number) => ({
+                author: String(t?.author || fallbackBlock.testimonials[idx % 3].author).trim(),
+                city: String(t?.city || fallbackBlock.testimonials[idx % 3].city).trim(),
+                rating: 5,
+                comment: String(t?.comment || fallbackBlock.testimonials[idx % 3].comment).trim(),
+                verified: true,
+              }))
+            : fallbackBlock.testimonials,
+        faq:
+          Array.isArray(block.faq) && block.faq.length >= 2
+            ? block.faq.slice(0, 4).map((f: any, idx: number) => ({
+                question: String(f?.question || fallbackBlock.faq[idx % 4].question).trim(),
+                answer: String(f?.answer || fallbackBlock.faq[idx % 4].answer).trim(),
+              }))
+            : fallbackBlock.faq,
+      };
+    };
+
+    for (const modelName of ['gemini-4-hydrogen', 'gemini-3.1-flash-lite']) {
+      try {
+        const gemRes = await ai.models.generateContent({
+          model: modelName,
+          contents: contentsPayload,
+          config: {
+            responseMimeType: 'application/json',
+            temperature: 0.45,
+          },
+        });
+        const raw = (gemRes.text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          if (parsed.fr || parsed.ar) {
+            if (parsed.fr) frCopy = normalizeLangBlock(parsed.fr, frCopy);
+            if (parsed.ar) arCopy = normalizeLangBlock(parsed.ar, arCopy);
+          } else if (parsed.headline) {
+            // Single-language response fallback
+            const isArResp = /[\u0600-\u06FF]/.test(String(parsed.headline));
+            if (isArResp) {
+              arCopy = normalizeLangBlock(parsed, arCopy);
+            } else {
+              frCopy = normalizeLangBlock(parsed, frCopy);
+            }
+          }
+          break;
+        }
+      } catch (e: any) {
+        console.warn(`[LandingPageGen] Note modèle ${modelName}:`, e?.message || e);
+      }
+    }
+  }
+
+  const preferAr = lang === 'ar' || fallbackCopy.isArabicPrimary;
+  const activeCopy = preferAr ? arCopy : frCopy;
 
   const newPage = {
     id: crypto.randomUUID(),
     slug: cleanSlug,
     userId: 'user',
+    analysisId: analysis_id || undefined,
+    analysis_id: analysis_id || undefined,
     productName,
     category: category || 'Autre',
     targetPriceDZD: unitPrice,
     originalPriceDZD: strikePrice,
-    photoUrl: photoUrl || '',
-    headline,
-    subheadline,
-    badgeKicker: '🇩🇿 Offre Spéciale Algérie • Stock Limité',
+    photoUrl: primaryPhotoUrl,
+    photoUrls: allPhotosList,
+    headline: activeCopy.headline,
+    subheadline: activeCopy.subheadline,
+    description: activeCopy.description,
+    badgeKicker: activeCopy.badgeKicker,
     styleTheme: detectedTheme,
     style_theme: detectedTheme,
-    benefits: [
-      {
-        title: 'Qualité Supérieure Certifiée',
-        description: 'Matériaux nobles, finitions d’orfèvre et longévité assurée pour une expérience d’utilisation irréprochable.',
-        icon: 'ShieldCheck',
-      },
-      {
-        title: 'Livraison Rapide 58 Wilayas',
-        description: 'Expédié sous 24h via nos partenaires logistiques Yalidine et ZR Express avec suivi par SMS.',
-        icon: 'Truck',
-      },
-      {
-        title: 'Vérification Avant Paiement',
-        description: 'Vous ouvrez et inspectez votre colis avec le livreur avant de régler en toute confiance.',
-        icon: 'CheckCircle2',
-      },
-      {
-        title: 'Service Client Dédié 7j/7',
-        description: 'Assistance téléphonique et WhatsApp réactive pour vous accompagner avant et après votre achat.',
-        icon: 'Award',
-      },
-    ],
-    features: [
-      'Garantie échange immédiat en cas de défaut',
-      'Emballage renforcé antichoc pour le transport',
-      'Guide d’utilisation en français et en arabe inclus',
-      'Support après-vente disponible par WhatsApp',
-    ],
-    faq: [
-      {
-        question: 'Comment se déroule la livraison en Algérie ?',
-        answer: 'Votre commande est prise en charge sous 24h. Le livreur vous contacte par téléphone avant son passage pour convenir de l’heure exacte de livraison.',
-      },
-      {
-        question: 'Puis-je ouvrir le colis avant de payer ?',
-        answer: 'Oui, absolument. Vous vérifiez le contenu de votre paquet en présence du livreur avant de régler en espèces (Paiement COD).',
-      },
-      {
-        question: 'Comment contacter le service client ?',
-        answer: 'Dès validation de votre commande, vous recevez nos coordonnées directes et notre ligne WhatsApp d’assistance.',
-      },
-    ],
-    ctaText: 'Commander Maintenant • Paiement à la Livraison',
-    guaranteeBadgeText: 'Paiement à la livraison après vérification',
-    deliveryInfo: 'Livraison express 24h à 48h dans les 58 wilayas',
+    benefits: activeCopy.benefits,
+    features: activeCopy.features,
+    testimonials: activeCopy.testimonials,
+    faq: activeCopy.faq,
+    ctaText: activeCopy.ctaText,
+    guaranteeBadgeText: activeCopy.guaranteeBadgeText,
+    deliveryInfo: activeCopy.deliveryInfo,
+    localizedContent: {
+      fr: frCopy,
+      ar: arCopy,
+    },
     viewsCount: 1,
     ordersCount: 0,
     createdAt: new Date().toISOString(),
@@ -2043,14 +2774,14 @@ app.get('/api/gemini/status', (req, res) => {
   res.json({
     status: hasKey ? 'connected' : 'missing_key',
     isConfigured: hasKey,
-    primaryModel: 'gemini-3.6-flash',
+    primaryModel: 'gemini-4-hydrogen',
     fallbackModel: 'gemini-3.1-flash-lite',
     resilientEngineActive: true,
     searchGrounding: true,
     telemetryHeader: 'aistudio-build',
     serverSideOnly: true,
     message: hasKey
-      ? 'Moteur Gemini AI opérationnel côté serveur avec basculement automatique haute résilience.'
+      ? 'Moteur Gemini AI opérationnel côté serveur (gemini-4-hydrogen) avec basculement automatique haute résilience.'
       : 'Clé GEMINI_API_KEY non détectée dans l\'environnement.',
   });
 });
@@ -2058,62 +2789,28 @@ app.get('/api/gemini/status', (req, res) => {
 app.post('/api/gemini/test', async (req, res) => {
   const startTime = Date.now();
   let geminiSuccess = false;
-  let geminiModel = 'gemini-3.6-flash';
+  let geminiModel = 'gemini-4-hydrogen';
   let geminiReply = '';
 
-  // 1. Test live Gemini API generation
-  try {
-    const testResponse = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': 'aistudio-build',
-        },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: 'Réponds en un seul mot: Opérationnel' }] }],
-        }),
-      }
-    );
-    if (testResponse.ok) {
-      const data = await testResponse.json();
-      geminiReply = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'Opérationnel';
-      geminiSuccess = true;
-    } else {
-      // Fallback test on gemini-3.1-flash-lite
-      const fbResponse = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'User-Agent': 'aistudio-build',
-          },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: 'Réponds: Opérationnel' }] }],
-          }),
+  const ai = getGenAIClient();
+  if (ai) {
+    for (const modelName of ['gemini-4-hydrogen', 'gemini-3.1-flash-lite']) {
+      try {
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents: 'Réponds en un seul mot: Opérationnel',
+        });
+        const text = (response.text || '').trim();
+        if (text) {
+          geminiReply = text;
+          geminiModel = modelName;
+          geminiSuccess = true;
+          break;
         }
-      );
-      if (fbResponse.ok) {
-        geminiSuccess = true;
-        geminiModel = 'gemini-3.1-flash-lite';
-        geminiReply = 'Opérationnel (secours résilient)';
+      } catch (err: any) {
+        console.warn(`[Gemini Test] Modèle ${modelName} note:`, err?.message || err);
       }
     }
-  } catch (err: any) {
-    console.warn('[Gemini Test] Erreur test direct:', err?.message);
-  }
-
-  // 2. Check Supabase Edge Function connectivity
-  let supabaseEdgeStatus = 'inconnu';
-  try {
-    const edgeRes = await fetch('https://wyvxxsrlnnlajscvqofy.supabase.co/functions/v1/analyser-produit', {
-      method: 'OPTIONS',
-    });
-    supabaseEdgeStatus = edgeRes.ok ? 'connecté' : `http_${edgeRes.status}`;
-  } catch {
-    supabaseEdgeStatus = 'indisponible';
   }
 
   const latencyMs = Date.now() - startTime;
@@ -2123,12 +2820,12 @@ app.post('/api/gemini/test', async (req, res) => {
       success: true,
       model: geminiModel,
       latencyMs,
-      reply: `Moteur Gemini actif (${geminiReply}). Relais Supabase : ${supabaseEdgeStatus}. Protection résilience active.`,
+      reply: `Moteur Gemini actif (${geminiReply}) via ${geminiModel}. Protection résilience active.`,
     });
   } else {
     return res.status(500).json({
       success: false,
-      error: 'Échec de réponse de l\'API Gemini Google.',
+      error: 'Échec de réponse de l\'API Gemini Google. Vérifiez GEMINI_API_KEY dans Settings > Secrets.',
     });
   }
 });
@@ -2172,6 +2869,12 @@ app.get('/sitemap.xml', (req, res) => {
     <priority>0.9</priority>
   </url>
 </urlset>`);
+});
+
+// Redirect legacy /p/:slug deep links to root /?p=:slug to avoid proxy sub-path 403 issues
+app.get('/p/:slug', (req, res) => {
+  const cleanSlug = encodeURIComponent((req.params.slug || '').trim());
+  res.redirect(302, `/?p=${cleanSlug}`);
 });
 
 // 404 Catch-all for API routes to prevent falling into Vite HTML SPA handler

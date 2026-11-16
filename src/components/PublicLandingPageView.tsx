@@ -38,7 +38,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { PublicLandingPage, StyleTheme, LandingPageOrder } from '../types';
-import { THEME_CONFIGS, ThemeConfig, localizeLandingPage } from '../lib/landingPageThemes';
+import { THEME_CONFIGS, ThemeConfig, localizeLandingPage, buildPublicLandingPageUrl } from '../lib/landingPageThemes';
 import { ALGERIAN_WILAYAS, getWilayaByCode } from '../lib/wilayas';
 import { supabase, SUPABASE_ANON_KEY } from '../lib/supabase';
 import { initFacebookPixel, initTikTokPixel, trackPurchaseEvents } from '../lib/trackingPixels';
@@ -108,6 +108,7 @@ export const PublicLandingPageView: React.FC<PublicLandingPageViewProps> = ({
   const [lang, setLang] = useState<'fr' | 'ar'>(initialLang);
   const [expandedFaq, setExpandedFaq] = useState<number | null>(0);
   const [showImageZoom, setShowImageZoom] = useState(false);
+  const [selectedHeroPhotoIdx, setSelectedHeroPhotoIdx] = useState(0);
   const [isPreviewBarOpen, setIsPreviewBarOpen] = useState(showPreviewBar);
 
   // Form State
@@ -135,6 +136,17 @@ export const PublicLandingPageView: React.FC<PublicLandingPageViewProps> = ({
   const isAr = lang === 'ar';
   const page = useMemo(() => localizeLandingPage(initialPage, lang), [initialPage, lang]);
   const theme: ThemeConfig = THEME_CONFIGS[activeTheme] || THEME_CONFIGS['gold-noir'];
+
+  const heroPhotos: string[] = useMemo(() => {
+    const rawList = page.photoUrls || page.photo_urls || initialPage.photoUrls || initialPage.photo_urls;
+    if (Array.isArray(rawList) && rawList.length > 0) {
+      return rawList.filter(Boolean);
+    }
+    if (page.photoUrl) return [page.photoUrl];
+    return [];
+  }, [page.photoUrls, page.photo_urls, page.photoUrl, initialPage.photoUrls, initialPage.photo_urls]);
+
+  const activeHeroPhotoUrl = heroPhotos[selectedHeroPhotoIdx] || heroPhotos[0] || page.photoUrl;
 
   const selectedWilaya = useMemo(
     () => getWilayaByCode(selectedWilayaCode) || ALGERIAN_WILAYAS[15],
@@ -306,9 +318,7 @@ export const PublicLandingPageView: React.FC<PublicLandingPageViewProps> = ({
     '';
   const cleanWhatsAppNumber = formatWhatsAppNumber(rawWhatsAppNum);
 
-  const pageUrl = typeof window !== 'undefined'
-    ? window.location.href
-    : `https://ais-pre-dbp7jgomhubklothgs3ua7-444984766206.europe-west3.run.app/p/${page.slug}`;
+  const pageUrl = buildPublicLandingPageUrl(page.slug);
 
   const productName = page.productName || 'ce produit';
   const displayPrice = (unitPrice || 3500).toLocaleString();
@@ -709,10 +719,10 @@ export const PublicLandingPageView: React.FC<PublicLandingPageViewProps> = ({
             <div
               className={`relative mx-auto max-w-2xl rounded-3xl overflow-hidden p-2 sm:p-3 transition-transform duration-300 ${theme.heroImageRingClass} ${theme.heroImageShadowClass} ${theme.cardBgClass}`}
             >
-              {page.photoUrl ? (
+              {activeHeroPhotoUrl ? (
                 <div className="relative group cursor-zoom-in" onClick={() => setShowImageZoom(true)}>
                   <img
-                    src={page.photoUrl}
+                    src={activeHeroPhotoUrl}
                     alt={page.productName}
                     referrerPolicy="no-referrer"
                     onError={(e) => {
@@ -753,6 +763,34 @@ export const PublicLandingPageView: React.FC<PublicLandingPageViewProps> = ({
                 </span>
               </div>
             </div>
+
+            {/* Thumbnail Switcher when multiple photos exist */}
+            {heroPhotos.length > 1 && (
+              <div className="flex items-center justify-center gap-2.5 mt-4 overflow-x-auto py-1">
+                {heroPhotos.map((pUrl, idx) => (
+                  <button
+                    key={`${pUrl}_${idx}`}
+                    type="button"
+                    onClick={() => setSelectedHeroPhotoIdx(idx)}
+                    className={`w-14 h-14 sm:w-16 sm:h-16 rounded-xl overflow-hidden border-2 transition cursor-pointer shrink-0 ${
+                      selectedHeroPhotoIdx === idx
+                        ? 'border-amber-400 scale-105 shadow-md'
+                        : 'border-white/15 opacity-65 hover:opacity-100'
+                    }`}
+                  >
+                    <img
+                      src={pUrl}
+                      alt={`${page.productName} ${idx + 1}`}
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        (e.currentTarget as HTMLImageElement).src = '/icon-512.png';
+                      }}
+                      className="w-full h-full object-cover"
+                    />
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Hero Call to Action Button */}
@@ -822,10 +860,10 @@ export const PublicLandingPageView: React.FC<PublicLandingPageViewProps> = ({
           <section className="pt-20 sm:pt-24 space-y-8 sm:space-y-12">
             <div className="text-center max-w-2xl mx-auto space-y-2.5">
               <span className={`text-xs font-bold uppercase tracking-wider ${theme.mutedTextClass}`}>
-                {isAr ? 'لماذا يفضله زبائننا في الجزائر؟' : 'Ce qui fait toute la différence'}
+                {isAr ? `لماذا يختار الزبائن ${page.productName} ؟` : `Pourquoi choisir ${page.productName} ?`}
               </span>
               <h2 className={`text-2xl sm:text-4xl font-serif font-bold ${theme.headingTextClass}`}>
-                {isAr ? 'مزايا فريدة مصممة لتلبية تطلعاتك' : 'Des Atouts Conçus Pour Votre Quotidien'}
+                {isAr ? `المزايا الحصرية لـ ${page.productName}` : `Les Points Forts de ${page.productName}`}
               </h2>
             </div>
 
@@ -857,7 +895,7 @@ export const PublicLandingPageView: React.FC<PublicLandingPageViewProps> = ({
               <div className="flex items-center gap-3">
                 <CheckCircle2 className={`w-6 h-6 ${theme.trustIconColor}`} />
                 <h3 className={`text-xl sm:text-2xl font-serif font-bold ${theme.headingTextClass}`}>
-                  {isAr ? 'المواصفات الفنية والمميزات الدقيقة' : 'Caractéristiques & Détails de Fabrication'}
+                  {isAr ? `المواصفات والتفاصيل الخاصة بـ ${page.productName}` : `Caractéristiques & Détails de ${page.productName}`}
                 </h3>
               </div>
 
@@ -881,7 +919,7 @@ export const PublicLandingPageView: React.FC<PublicLandingPageViewProps> = ({
                 {isAr ? 'آراء وتجارب حقيقية' : 'Témoignages Vérifiés'}
               </span>
               <h2 className={`text-2xl sm:text-4xl font-serif font-bold ${theme.headingTextClass}`}>
-                {isAr ? 'ماذا يقول المشترون في مختلف ولايات الجزائر' : 'Ils Ont Choisi la Qualité en Algérie'}
+                {isAr ? `آراء المشترين حول ${page.productName}` : `Leurs Avis sur ${page.productName}`}
               </h2>
             </div>
 
@@ -928,7 +966,7 @@ export const PublicLandingPageView: React.FC<PublicLandingPageViewProps> = ({
                 {isAr ? 'الأسئلة الشائعة' : 'Foire Aux Questions'}
               </span>
               <h2 className={`text-2xl sm:text-4xl font-serif font-bold ${theme.headingTextClass}`}>
-                {isAr ? 'كل ما تحتاج معرفته قبل الطلب' : 'Tout Ce Que Vous Devez Savoir'}
+                {isAr ? `كل ما تحتاج معرفته حول ${page.productName}` : `Tout Savoir sur ${page.productName}`}
               </h2>
             </div>
 
@@ -1427,7 +1465,7 @@ export const PublicLandingPageView: React.FC<PublicLandingPageViewProps> = ({
       </div>
 
       {/* FULLSCREEN PHOTO ZOOM MODAL */}
-      {showImageZoom && page.photoUrl && (
+      {showImageZoom && activeHeroPhotoUrl && (
         <div
           className="fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex items-center justify-center p-4 cursor-zoom-out"
           onClick={() => setShowImageZoom(false)}
@@ -1439,7 +1477,7 @@ export const PublicLandingPageView: React.FC<PublicLandingPageViewProps> = ({
             <X className="w-6 h-6" />
           </button>
           <img
-            src={page.photoUrl}
+            src={activeHeroPhotoUrl}
             alt={page.productName}
             referrerPolicy="no-referrer"
             className="max-w-full max-h-[90vh] object-contain rounded-2xl shadow-2xl"

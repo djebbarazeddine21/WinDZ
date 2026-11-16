@@ -152,9 +152,28 @@ export default function App() {
         localStorage.removeItem('windz_token');
       }
 
+      const extractSlugFromWindowLocation = (): string | null => {
+        if (typeof window === 'undefined') return null;
+        const params = new URLSearchParams(window.location.search);
+        const querySlug = params.get('p') || params.get('lp') || params.get('page');
+        if (querySlug && querySlug.trim()) {
+          return decodeURIComponent(querySlug.trim());
+        }
+        const pathMatch = window.location.pathname.match(/^\/p\/([^/?#]+)/);
+        if (pathMatch && pathMatch[1]) {
+          return decodeURIComponent(pathMatch[1]);
+        }
+        const hashMatch = window.location.hash.match(/^#\/?p\/([^/?#]+)/);
+        if (hashMatch && hashMatch[1]) {
+          return decodeURIComponent(hashMatch[1]);
+        }
+        return null;
+      };
+
       // Check and sync Supabase active session strictly via Supabase Auth
       try {
         const sessionInfo = await getValidSupabaseSession();
+        const requestedSlug = extractSlugFromWindowLocation();
         if (sessionInfo?.user && sessionInfo.token && sessionInfo.token.startsWith('ey')) {
           const mappedUser = mapSupabaseUser(sessionInfo.user);
           setUser(mappedUser);
@@ -171,34 +190,25 @@ export default function App() {
           // Check if user directly loaded pwa-debug or a public landing page
           if (window.location.pathname === '/pwa-debug') {
             setCurrentView('pwa_debug');
+          } else if (requestedSlug) {
+            const resolved = await resolveLandingPage(requestedSlug);
+            setActivePublicPage(resolved);
+            setCurrentView('public_page');
           } else {
-            const publicPathMatch = window.location.pathname.match(/^\/p\/([^/?#]+)/);
-            if (publicPathMatch) {
-              const slug = decodeURIComponent(publicPathMatch[1]);
-              const resolved = await resolveLandingPage(slug);
-              setActivePublicPage(resolved);
-              setCurrentView('public_page');
+            if (mappedUser.role === 'admin') {
+              setCurrentView('admin');
             } else {
-              if (mappedUser.role === 'admin') {
-                setCurrentView('admin');
-              } else {
-                setCurrentView('form');
-              }
+              setCurrentView('form');
             }
           }
         } else {
           setUser(null);
           if (window.location.pathname === '/pwa-debug') {
             setCurrentView('pwa_debug');
-          } else {
-            // Check if visitor directly loaded a public landing page (/p/:slug)
-            const publicPathMatch = window.location.pathname.match(/^\/p\/([^/?#]+)/);
-            if (publicPathMatch) {
-              const slug = decodeURIComponent(publicPathMatch[1]);
-              const resolved = await resolveLandingPage(slug);
-              setActivePublicPage(resolved);
-              setCurrentView('public_page');
-            }
+          } else if (requestedSlug) {
+            const resolved = await resolveLandingPage(requestedSlug);
+            setActivePublicPage(resolved);
+            setCurrentView('public_page');
           }
         }
       } catch (sbErr) {
@@ -308,6 +318,34 @@ export default function App() {
     const isUuid = (val?: any): boolean =>
       typeof val === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
 
+    const mergeRichPageFields = (base: PublicLandingPage, richSource?: any): PublicLandingPage => {
+      if (!richSource || typeof richSource !== 'object') return base;
+      return {
+        ...base,
+        badgeKicker: base.badgeKicker || richSource.badgeKicker,
+        photoUrl: base.photoUrl || richSource.photoUrl,
+        photoUrls:
+          Array.isArray(base.photoUrls) && base.photoUrls.length > 0
+            ? base.photoUrls
+            : Array.isArray(richSource.photoUrls) && richSource.photoUrls.length > 0
+            ? richSource.photoUrls
+            : base.photoUrls,
+        features:
+          Array.isArray(base.features) && base.features.length > 0
+            ? base.features
+            : Array.isArray(richSource.features) && richSource.features.length > 0
+            ? richSource.features
+            : base.features,
+        testimonials:
+          Array.isArray(base.testimonials) && base.testimonials.length > 0
+            ? base.testimonials
+            : Array.isArray(richSource.testimonials) && richSource.testimonials.length > 0
+            ? richSource.testimonials
+            : base.testimonials,
+        localizedContent: base.localizedContent || richSource.localizedContent,
+      };
+    };
+
     // 1. Déterminer le slug ou UUID cible
     let targetSlugOrId = '';
     if (typeof pageOrSlug === 'string') {
@@ -316,61 +354,51 @@ export default function App() {
       targetSlugOrId = pageOrSlug.slug || (isUuid(pageOrSlug.id) ? pageOrSlug.id : '');
     }
 
-    // 2. SOURCE DE VÉRITÉ PRIMAIRE : Requête directe sur la table Supabase 'landing_pages'
+    // 2. Si on a un slug ou UUID, récupérer depuis api.landingPages.getBySlug (qui interroge Supabase + enrichit les champs IA)
     if (targetSlugOrId) {
-      try {
-        const sbPage = await supabaseDb.getLandingPageBySlug(targetSlugOrId);
-        if (sbPage && sbPage.id && isUuid(sbPage.id)) {
-          setLastGeneratedPage(sbPage);
-          try {
-            localStorage.setItem('windz_last_landing_page', JSON.stringify(sbPage));
-          } catch {}
-          return sbPage;
-        }
-      } catch (err) {
-        console.warn('[App] Supabase getLandingPageBySlug note:', err);
-      }
-
-      // 3. Essayer l'API serveur si Supabase n'a pas répondu
       try {
         const res = await api.landingPages.getBySlug(targetSlugOrId);
         if (res?.page && res.page.id && isUuid(res.page.id)) {
-          setLastGeneratedPage(res.page);
+          const merged = mergeRichPageFields(res.page, typeof pageOrSlug === 'object' ? pageOrSlug : lastGeneratedPage);
+          setLastGeneratedPage(merged);
           try {
-            localStorage.setItem('windz_last_landing_page', JSON.stringify(res.page));
+            localStorage.setItem('windz_last_landing_page', JSON.stringify(merged));
           } catch {}
-          return res.page;
+          return merged;
         }
-      } catch {}
+      } catch (err) {
+        console.warn('[App] getBySlug note:', err);
+      }
     }
 
-    // 4. Si un objet complet avec un vrai UUID Supabase est déjà fourni
+    // 3. Si un objet complet généré par l'IA est déjà fourni
     if (pageOrSlug && typeof pageOrSlug === 'object') {
-      if (isUuid(pageOrSlug.id) && pageOrSlug.slug && pageOrSlug.benefits) {
-        return pageOrSlug;
+      if (pageOrSlug.slug && Array.isArray(pageOrSlug.benefits) && pageOrSlug.benefits.length > 0) {
+        return pageOrSlug as PublicLandingPage;
       }
       if (pageOrSlug.productName) {
-        const built = buildLandingPageFromAnalysis(pageOrSlug, { lang });
-        api.landingPages.generate(pageOrSlug).then((res) => {
-          if (res?.page && isUuid(res.page.id)) {
-            setLastGeneratedPage(res.page);
+        try {
+          const genRes = await api.landingPages.generateViaEdge(pageOrSlug);
+          if (genRes?.page) {
+            setLastGeneratedPage(genRes.page);
             try {
-              localStorage.setItem('windz_last_landing_page', JSON.stringify(res.page));
+              localStorage.setItem('windz_last_landing_page', JSON.stringify(genRes.page));
             } catch {}
+            return genRes.page;
           }
-        }).catch(() => {});
-        return built;
+        } catch {}
+        return buildLandingPageFromAnalysis(pageOrSlug, { lang });
       }
     }
 
-    // 5. Cache mémoire si et seulement si l'ID est un vrai UUID
+    // 4. Cache mémoire si et seulement si l'ID est un vrai UUID
     if (lastGeneratedPage && isUuid(lastGeneratedPage.id)) {
       if (!targetSlugOrId || lastGeneratedPage.slug === targetSlugOrId) {
         return lastGeneratedPage;
       }
     }
 
-    // 6. Données de secours / seed
+    // 5. Données de secours / seed
     const seed = targetSlugOrId ? SEED_LANDING_PAGES.find((p) => p.slug === targetSlugOrId) : null;
     if (seed) return seed;
 
@@ -387,9 +415,14 @@ export default function App() {
         setCurrentView('pwa_debug');
         return;
       }
-      const match = pathname.match(/^\/p\/([^/?#]+)/);
-      if (match) {
-        const slug = decodeURIComponent(match[1]);
+      const params = new URLSearchParams(window.location.search);
+      const querySlug = params.get('p') || params.get('lp') || params.get('page');
+      const pathMatch = pathname.match(/^\/p\/([^/?#]+)/);
+      const hashMatch = window.location.hash.match(/^#\/?p\/([^/?#]+)/);
+      const rawSlug = querySlug || (pathMatch && pathMatch[1]) || (hashMatch && hashMatch[1]);
+
+      if (rawSlug) {
+        const slug = decodeURIComponent(rawSlug.trim());
         const resolved = await resolveLandingPage(slug);
         setActivePublicPage(resolved);
         setCurrentView('public_page');
@@ -409,7 +442,7 @@ export default function App() {
     } catch {}
     setActivePublicPage(targetPage);
     setCurrentView('public_page');
-    window.history.pushState({}, '', `/p/${targetPage.slug}`);
+    window.history.pushState({}, '', `/?p=${encodeURIComponent(targetPage.slug)}`);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -482,6 +515,7 @@ export default function App() {
         platformSettings={platformSettings}
         onSettingsUpdated={(newSettings) => setPlatformSettings(newSettings)}
         onExitAdmin={() => setCurrentView('form')}
+        onOpenPublicPage={handleOpenPublicLandingPage}
       />
     );
   }

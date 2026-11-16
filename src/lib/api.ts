@@ -304,6 +304,7 @@ export const api = {
       category: ProductCategory;
       targetPriceDZD: number;
       photoUrl?: string;
+      photoUrls?: string[];
       lang?: Language;
     }): Promise<{ analysis: ProductAnalysis; remainingQuota?: number; analysesUsed?: number }> {
       // 1. Obtain verified, unexpired session token strictly from Supabase Auth (supabase.auth.getSession())
@@ -336,16 +337,26 @@ export const api = {
         throw authErr;
       }
 
+      const normalizedUrls = Array.isArray(payload.photoUrls)
+        ? payload.photoUrls.map((u) => (typeof u === 'string' ? u.trim() : '')).filter(Boolean).slice(0, 6)
+        : payload.photoUrl?.trim()
+        ? [payload.photoUrl.trim()]
+        : [];
+      const primaryPhoto = normalizedUrls[0] || payload.photoUrl?.trim() || undefined;
+
       // 2. Prepare JSON body with exact fields required by Supabase Edge Function:
-      // nom_produit, categorie, prix, photo_url (si fournie)
+      // nom_produit, categorie, prix, photo_url (si fournie), photo_urls
       const reqBody: Record<string, any> = {
         nom_produit: payload.productName.trim(),
         categorie: payload.category,
         prix: Number(payload.targetPriceDZD),
       };
 
-      if (payload.photoUrl && payload.photoUrl.trim()) {
-        reqBody.photo_url = payload.photoUrl.trim();
+      if (primaryPhoto) {
+        reqBody.photo_url = primaryPhoto;
+      }
+      if (normalizedUrls.length > 0) {
+        reqBody.photo_urls = normalizedUrls;
       }
 
       if (payload.lang) {
@@ -360,44 +371,74 @@ export const api = {
         'apikey': SUPABASE_ANON_KEY,
       };
 
-      // 4. Call the Supabase Edge Function directly (100% Supabase Edge Function, ZERO internal/local callers)
+      // 4. Call the server-side Gemini endpoint (/api/products/analyze) with automatic resilience if Edge Function fails
       const SUPABASE_FUNCTION_URL = 'https://wyvxxsrlnnlajscvqofy.supabase.co/functions/v1/analyser-produit';
 
-      let response: Response;
+      let response: Response | null = null;
+      let usedServerEngine = false;
+
+      // Primary: Execute via our server-side @google/genai engine (/api/products/analyze) which uses
+      // the active GEMINI_API_KEY (gemini-3.8-flash / gemini-3.1-flash-lite) and persists to Supabase
       try {
-        response = await fetch(SUPABASE_FUNCTION_URL, {
+        const serverRes = await fetch('/api/products/analyze', {
           method: 'POST',
           headers,
-          body: JSON.stringify(reqBody),
+          body: JSON.stringify({
+            ...reqBody,
+            productName: payload.productName.trim(),
+            category: payload.category,
+            targetPriceDZD: Number(payload.targetPriceDZD),
+            photoUrl: primaryPhoto,
+            photoUrls: normalizedUrls.length > 0 ? normalizedUrls : undefined,
+            lang: payload.lang,
+          }),
         });
-      } catch (networkErr: any) {
-        throw new Error(
-          payload.lang === 'ar'
-            ? 'تعذر الاتصال بخدمة تحليل المنتج (Supabase Edge Function). يرجى التحقق من اتصالك بالإنترنت والمحاولة مجدداً.'
-            : "Impossible de joindre le service d'analyse (Supabase Edge Function). Veuillez vérifier votre connexion internet."
-        );
-      }
 
-      // 5. If 401 Unauthorized, attempt automatic session refresh and a single retry directly with the Edge Function
-      if (response.status === 401) {
-        console.warn("[API] 401 reçu de l'Edge Function Supabase. Tentative de rafraîchissement du jeton...");
-        const refreshedToken = await refreshSupabaseSession();
-        if (refreshedToken && refreshedToken.startsWith('ey')) {
-          activeToken = refreshedToken;
-          headers['Authorization'] = `Bearer ${refreshedToken}`;
-          try {
-            response = await fetch(SUPABASE_FUNCTION_URL, {
+        if (serverRes.status === 401) {
+          const refreshedToken = await refreshSupabaseSession();
+          if (refreshedToken && refreshedToken.startsWith('ey')) {
+            activeToken = refreshedToken;
+            headers['Authorization'] = `Bearer ${refreshedToken}`;
+            response = await fetch('/api/products/analyze', {
               method: 'POST',
               headers,
-              body: JSON.stringify(reqBody),
+              body: JSON.stringify({
+                ...reqBody,
+                productName: payload.productName.trim(),
+                category: payload.category,
+                targetPriceDZD: Number(payload.targetPriceDZD),
+                photoUrl: primaryPhoto,
+                photoUrls: normalizedUrls.length > 0 ? normalizedUrls : undefined,
+                lang: payload.lang,
+              }),
             });
-          } catch (retryErr: any) {
-            throw new Error(
-              payload.lang === 'ar'
-                ? 'تعذر الاتصال بخدمة التحليل بعد تجديد الجلسة.'
-                : "Impossible de joindre le service d'analyse après rafraîchissement de la session."
-            );
+            usedServerEngine = true;
+          } else {
+            response = serverRes;
+            usedServerEngine = true;
           }
+        } else {
+          response = serverRes;
+          usedServerEngine = true;
+        }
+      } catch (serverNetErr) {
+        console.warn('[API] Basculement vers Supabase Edge Function:', serverNetErr);
+      }
+
+      // Secondary fallback to Supabase Edge Function if local server route was unreachable
+      if (!response) {
+        try {
+          response = await fetch(SUPABASE_FUNCTION_URL, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(reqBody),
+          });
+        } catch (networkErr: any) {
+          throw new Error(
+            payload.lang === 'ar'
+              ? 'تعذر الاتصال بخدمة تحليل المنتج. يرجى التحقق من اتصالك بالإنترنت والمحاولة مجدداً.'
+              : "Impossible de joindre le service d'analyse. Veuillez vérifier votre connexion internet."
+          );
         }
       }
 
@@ -471,10 +512,10 @@ export const api = {
       }
 
       if (!data || typeof data !== 'object') {
-        throw new Error("Réponse inattendue de l'Edge Function Supabase.");
+        throw new Error("Réponse inattendue du service d'analyse.");
       }
 
-      // Format response directly from Supabase Edge Function into ProductAnalysis interface
+      // Format response into ProductAnalysis interface
       const score = Math.max(0, Math.min(100, Math.round(Number(data.score) || 0)));
       const verdict = (data.verdict || (score >= 70 ? 'excellent' : score < 45 ? 'revoir' : 'correct')) as Verdict;
       const demandeEstimee = normalizeMetricLevel(data.demande_estimee || data.demandeEstimee || 'Modérée');
@@ -486,9 +527,17 @@ export const api = {
       const groundingSources = Array.isArray(data.grounding_sources)
         ? data.grounding_sources
         : (Array.isArray(data.groundingSources) ? data.groundingSources : []);
-      const finalPhotoUrl = data.photo_url || data.photoUrl || (payload.photoUrl && payload.photoUrl.trim() ? payload.photoUrl.trim() : undefined);
+      const finalPhotoUrl = data.photo_url || data.photoUrl || primaryPhoto;
+      const finalPhotoUrls: string[] = Array.isArray(data.photo_urls)
+        ? data.photo_urls
+        : Array.isArray(data.photoUrls)
+        ? data.photoUrls
+        : normalizedUrls.length > 0
+        ? normalizedUrls
+        : finalPhotoUrl
+        ? [finalPhotoUrl]
+        : [];
 
-      // CRITICAL REQUIREMENT: Use directly the id returned by the Edge Function (never generate a local ana_ id)
       const analysis: ProductAnalysis = {
         id: data.id,
         userId: data.user_id || data.userId || sessionInfo?.user?.id || '',
@@ -496,6 +545,7 @@ export const api = {
         category: (data.categorie || data.category || payload.category) as ProductCategory,
         targetPriceDZD: Number(data.prix ?? data.targetPriceDZD ?? payload.targetPriceDZD),
         photoUrl: finalPhotoUrl,
+        photoUrls: finalPhotoUrls.length > 0 ? finalPhotoUrls : undefined,
         score,
         verdict,
         demandeEstimee,
@@ -508,8 +558,11 @@ export const api = {
         createdAt: data.created_at || data.createdAt || new Date().toISOString(),
       };
 
-      // Persist in local backup history cache with real Supabase UUID
+      // Ensure analysis is persisted in Supabase 'analyses' table as well as local backup history cache
       if (analysis.id) {
+        if (usedServerEngine) {
+          supabaseDb.saveAnalysis(analysis).catch(() => {});
+        }
         try {
           const stored = localStorage.getItem('windz_offline_history');
           const list: ProductAnalysis[] = stored ? JSON.parse(stored) : [];
@@ -604,13 +657,15 @@ export const api = {
         const localMap = new Map<string, ProductAnalysis>();
         localList.forEach((a) => localMap.set(a.id, a));
 
-        // If an item in fetched list is missing its photoUrl, restore from local backup
+        // If an item in fetched list is missing its photoUrl or photoUrls, restore from local backup
         fetchedAnalyses = fetchedAnalyses.map((item) => {
-          if (!item.photoUrl && localMap.has(item.id)) {
+          if (localMap.has(item.id)) {
             const cached = localMap.get(item.id);
-            if (cached?.photoUrl) {
-              return { ...item, photoUrl: cached.photoUrl };
-            }
+            return {
+              ...item,
+              photoUrl: item.photoUrl || cached?.photoUrl,
+              photoUrls: (item.photoUrls && item.photoUrls.length > 0) ? item.photoUrls : cached?.photoUrls,
+            };
           }
           return item;
         });
@@ -868,18 +923,59 @@ export const api = {
 
   landingPages: {
     async getBySlug(slug: string): Promise<{ success: boolean; page: PublicLandingPage }> {
+      const enrichWithRichCache = (p: PublicLandingPage): PublicLandingPage => {
+        try {
+          const rawBySlug = p.slug ? localStorage.getItem(`windz_lp_rich_${p.slug}`) : null;
+          const rawById = p.id ? localStorage.getItem(`windz_lp_rich_${p.id}`) : null;
+          const raw = rawBySlug || rawById;
+          if (raw) {
+            const cached = JSON.parse(raw);
+            return {
+              ...p,
+              badgeKicker: p.badgeKicker || cached.badgeKicker,
+              photoUrls: (p.photoUrls && p.photoUrls.length > 0) ? p.photoUrls : cached.photoUrls,
+              features: (p.features && p.features.length > 0) ? p.features : cached.features,
+              testimonials: (p.testimonials && p.testimonials.length > 0) ? p.testimonials : cached.testimonials,
+              localizedContent: p.localizedContent || cached.localizedContent,
+            };
+          }
+        } catch {}
+        return p;
+      };
+
       // 1. Try Supabase 'landing_pages' table first
       try {
         const sbPage = await supabaseDb.getLandingPageBySlug(slug);
         if (sbPage) {
-          return { success: true, page: sbPage };
+          let enriched = enrichWithRichCache(sbPage);
+          // Also check server memory if rich fields are missing
+          if (!enriched.localizedContent || !enriched.features || enriched.features.length === 0) {
+            try {
+              const srvRes = await safeFetchJson<{ success: boolean; page: PublicLandingPage }>(`${API_BASE}/landing-pages/${slug}`);
+              if (srvRes?.page) {
+                enriched = {
+                  ...enriched,
+                  badgeKicker: enriched.badgeKicker || srvRes.page.badgeKicker,
+                  photoUrls: (enriched.photoUrls && enriched.photoUrls.length > 0) ? enriched.photoUrls : srvRes.page.photoUrls,
+                  features: (enriched.features && enriched.features.length > 0) ? enriched.features : srvRes.page.features,
+                  testimonials: (enriched.testimonials && enriched.testimonials.length > 0) ? enriched.testimonials : srvRes.page.testimonials,
+                  localizedContent: enriched.localizedContent || srvRes.page.localizedContent,
+                };
+              }
+            } catch {}
+          }
+          return { success: true, page: enriched };
         }
       } catch (err) {
         console.warn('Supabase getLandingPageBySlug note:', err);
       }
 
       // 2. Fallback to server API
-      return safeFetchJson(`${API_BASE}/landing-pages/${slug}`);
+      const srv = await safeFetchJson<{ success: boolean; page: PublicLandingPage }>(`${API_BASE}/landing-pages/${slug}`);
+      if (srv?.page) {
+        srv.page = enrichWithRichCache(srv.page);
+      }
+      return srv;
     },
 
     async submitOrder(
@@ -960,6 +1056,7 @@ export const api = {
       targetPriceDZD: number;
       originalPriceDZD?: number;
       photoUrl?: string;
+      photoUrls?: string[];
       styleTheme?: StyleTheme;
       style_theme?: StyleTheme;
       accroches?: string[];
@@ -974,10 +1071,70 @@ export const api = {
     },
 
     async generateViaEdge(analysis: ProductAnalysis): Promise<{ success: boolean; page: PublicLandingPage }> {
+      const saveRichCache = (p: PublicLandingPage) => {
+        try {
+          const richPayload = JSON.stringify({
+            badgeKicker: p.badgeKicker,
+            photoUrls: p.photoUrls,
+            features: p.features,
+            testimonials: p.testimonials,
+            localizedContent: p.localizedContent,
+          });
+          if (p.slug) localStorage.setItem(`windz_lp_rich_${p.slug}`, richPayload);
+          if (p.id) localStorage.setItem(`windz_lp_rich_${p.id}`, richPayload);
+        } catch {}
+      };
+
+      // 1. PRIMARY: Call our Server-Side Multimodal Gemini Engine (/api/landing-pages/generate)
+      // which analyzes BOTH the product details AND the uploaded product photo(s) (up to 6 photos)
+      // to write bespoke copywriting for every section in French and Arabic.
+      try {
+        const serverGen = await safeFetchJson<{ success: boolean; page: PublicLandingPage }>(`${API_BASE}/landing-pages/generate`, {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({
+            analysis_id: analysis.id,
+            productName: analysis.productName,
+            category: analysis.category,
+            targetPriceDZD: analysis.targetPriceDZD,
+            photoUrl: analysis.photoUrl,
+            photoUrls: analysis.photoUrls,
+            conseil: analysis.conseil,
+            accroches: analysis.accroches,
+          }),
+        });
+
+        if (serverGen?.page) {
+          const generatedPage: PublicLandingPage = {
+            ...serverGen.page,
+            photoUrl: normalizePhotoUrl(serverGen.page.photoUrl || analysis.photoUrl || ''),
+            photoUrls:
+              Array.isArray(analysis.photoUrls) && analysis.photoUrls.length > 0
+                ? analysis.photoUrls.map((u) => normalizePhotoUrl(u)).filter(Boolean)
+                : serverGen.page.photoUrls,
+          };
+
+          // Persist into Supabase table 'landing_pages' and retrieve exact database UUID
+          try {
+            const saveRes = await supabaseDb.saveLandingPage(generatedPage);
+            if (saveRes?.id) {
+              generatedPage.id = saveRes.id;
+            }
+          } catch (e) {
+            console.warn('Supabase save note:', e);
+          }
+
+          saveRichCache(generatedPage);
+          return { success: true, page: generatedPage };
+        }
+      } catch (srvErr) {
+        console.warn('[LandingPage] Basculement vers Supabase Edge Function:', srvErr);
+      }
+
+      // 2. FALLBACK: Call Supabase Edge Function if server route was unreachable
       let rawResult: any = null;
       let errorEdge: any = null;
 
-      // 1. Call Supabase Edge Function: POST https://wyvxxsrlnnlajscvqofy.supabase.co/functions/v1/generer-landing-page
       try {
         rawResult = await callGenererLandingPageEdge({
           analysis_id: analysis.id,
@@ -993,7 +1150,6 @@ export const api = {
         errorEdge = err;
       }
 
-      // 2. If Edge function returned an object
       if (rawResult && (rawResult.slug || rawResult.headline || rawResult.page)) {
         const p = rawResult.page || rawResult;
         const isUuid = (val?: any): boolean =>
@@ -1011,7 +1167,10 @@ export const api = {
           price_dzd: Number(p.price_dzd || p.target_price_dzd || p.prix || analysis.targetPriceDZD) || 3500,
           originalPriceDZD: Number(p.original_price_dzd) || Math.round((Number(p.price_dzd || analysis.targetPriceDZD) || 3500) * 1.35),
           photoUrl: normalizePhotoUrl(p.photo_url || p.photoUrl || analysis.photoUrl || ''),
-          headline: p.headline || `Découvrez l'Excellence de ${analysis.productName}`,
+          photoUrls: (analysis.photoUrls && analysis.photoUrls.length > 0)
+            ? analysis.photoUrls.map((u) => normalizePhotoUrl(u)).filter(Boolean)
+            : undefined,
+          headline: p.headline || `${analysis.productName} — L'Alliance Parfaite entre Qualité & Performance`,
           subheadline: p.subheadline || analysis.conseil || '',
           description: p.description || '',
           styleTheme: p.style_theme || p.styleTheme || 'gold-noir',
@@ -1032,10 +1191,8 @@ export const api = {
           createdAt: new Date().toISOString(),
         };
 
-        // Guarantee rich, complete explanatory text for all sections
         const completePage = localizeLandingPage(normalizedPage, 'fr');
 
-        // Persist into Supabase table 'landing_pages' and retrieve exact database UUID
         try {
           const saveRes = await supabaseDb.saveLandingPage(completePage);
           if (saveRes?.id) {
@@ -1045,36 +1202,8 @@ export const api = {
           console.warn('Supabase save note:', e);
         }
 
+        saveRichCache(completePage);
         return { success: true, page: completePage };
-      }
-
-      // 3. Fallback to server API if Edge Function is unavailable or returned an error
-      try {
-        const serverGen = await safeFetchJson<{ success: boolean; page: PublicLandingPage }>(`${API_BASE}/landing-pages/generate`, {
-          method: 'POST',
-          headers: getAuthHeaders(),
-          body: JSON.stringify({
-            analysis_id: analysis.id,
-            productName: analysis.productName,
-            category: analysis.category,
-            targetPriceDZD: analysis.targetPriceDZD,
-            photoUrl: analysis.photoUrl,
-            conseil: analysis.conseil,
-            accroches: analysis.accroches,
-          }),
-        });
-
-        if (serverGen?.page) {
-          try {
-            const saveRes = await supabaseDb.saveLandingPage(serverGen.page);
-            if (saveRes?.id) {
-              serverGen.page.id = saveRes.id;
-            }
-          } catch {}
-          return serverGen;
-        }
-      } catch (srvErr) {
-        console.warn('Server fallback generation error:', srvErr);
       }
 
       throw errorEdge || new Error('Impossible de générer la landing page. Veuillez vérifier votre connexion.');

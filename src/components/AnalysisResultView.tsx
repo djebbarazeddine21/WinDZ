@@ -30,8 +30,17 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
   const t = translations[lang];
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [isPhotoZoomed, setIsPhotoZoomed] = useState(false);
+  const [selectedPhotoIdx, setSelectedPhotoIdx] = useState(0);
   const [generatingLandingPage, setGeneratingLandingPage] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
+
+  const productPhotos: string[] =
+    Array.isArray(analysis.photoUrls) && analysis.photoUrls.length > 0
+      ? analysis.photoUrls.filter(Boolean)
+      : analysis.photoUrl
+      ? [analysis.photoUrl]
+      : [];
+  const activePhotoUrl = productPhotos[selectedPhotoIdx] || productPhotos[0] || analysis.photoUrl;
 
   const isPro = user?.subscriptionTier === 'pro';
 
@@ -112,6 +121,41 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
     );
   };
 
+  const handlePreviewAnalysisLanding = async () => {
+    setGeneratingLandingPage(true);
+    setGenerateError(null);
+    try {
+      const res = await api.landingPages.generateViaEdge(analysis);
+      if (res?.page && onOpenLandingPage) {
+        onOpenLandingPage(res.page);
+        return;
+      }
+    } catch (err: any) {
+      console.warn('Aperçu via génération IA:', err);
+    } finally {
+      setGeneratingLandingPage(false);
+    }
+
+    if (onOpenLandingPage) {
+      const isUuid = typeof analysis.id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(analysis.id);
+      onOpenLandingPage({
+        id: isUuid ? analysis.id : '',
+        analysisId: analysis.id,
+        productName: analysis.productName,
+        category: analysis.category,
+        targetPriceDZD: analysis.targetPriceDZD,
+        originalPriceDZD: Math.round(analysis.targetPriceDZD * 1.35),
+        photoUrl: analysis.photoUrl,
+        photoUrls: analysis.photoUrls,
+        styleTheme: detectedTheme,
+        style_theme: detectedTheme,
+        accroches: analysis.accroches,
+        conseil: localizedConseil,
+        showPreviewBar: true,
+      });
+    }
+  };
+
   return (
     <div className="w-full max-w-xl mx-auto space-y-3 pb-8 min-w-0 max-w-full">
       {/* Top action nav */}
@@ -132,54 +176,89 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
         </button>
       </div>
 
-      {/* Top Header Card: Photo alongside Product Name */}
-      <div className="bg-[#152428] border border-[#233A3E] rounded-2xl p-4 flex items-center gap-3.5 shadow-md">
-        {analysis.photoUrl ? (
-          <div className="relative group shrink-0">
-            <button
-              type="button"
-              onClick={() => setIsPhotoZoomed(true)}
-              className="block relative rounded-xl overflow-hidden border border-[#2A9D8F]/30 bg-[#0F1B1E] focus:outline-none focus:ring-2 focus:ring-[#D4A34A] cursor-zoom-in"
-              title={lang === 'ar' ? 'تكبير الصورة' : 'Agrandir la photo'}
-            >
-              <img
-                src={analysis.photoUrl}
-                alt={analysis.productName}
-                referrerPolicy="no-referrer"
-                onError={(e) => {
-                  (e.currentTarget as HTMLImageElement).src = '/icon-512.png';
-                }}
-                className="w-16 h-16 sm:w-20 sm:h-20 object-cover group-hover:scale-105 transition duration-200"
-              />
-              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
-                <Maximize2 className="w-4 h-4 text-white drop-shadow" />
-              </div>
-            </button>
+      {/* Top Header Card: Photo alongside Product Name + Multi-Photo Gallery */}
+      <div className="bg-[#152428] border border-[#233A3E] rounded-2xl p-4 space-y-3 shadow-md">
+        <div className="flex items-center gap-3.5">
+          {activePhotoUrl ? (
+            <div className="relative group shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsPhotoZoomed(true)}
+                className="block relative rounded-xl overflow-hidden border border-[#2A9D8F]/30 bg-[#0F1B1E] focus:outline-none focus:ring-2 focus:ring-[#D4A34A] cursor-zoom-in"
+                title={lang === 'ar' ? 'تكبير الصورة' : 'Agrandir la photo'}
+              >
+                <img
+                  src={activePhotoUrl}
+                  alt={analysis.productName}
+                  referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    (e.currentTarget as HTMLImageElement).src = '/icon-512.png';
+                  }}
+                  className="w-16 h-16 sm:w-20 sm:h-20 object-cover group-hover:scale-105 transition duration-200"
+                />
+                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
+                  <Maximize2 className="w-4 h-4 text-white drop-shadow" />
+                </div>
+                {productPhotos.length > 1 && (
+                  <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/75 text-[#D4A34A] text-[9px] font-bold">
+                    {selectedPhotoIdx + 1}/{productPhotos.length}
+                  </span>
+                )}
+              </button>
+            </div>
+          ) : (
+            <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl bg-[#0F1B1E] border border-[#233A3E] flex items-center justify-center text-[#D4A34A] shrink-0 font-serif font-bold text-xl">
+              DZ
+            </div>
+          )}
+
+          <div className="flex-1 min-w-0">
+            <span className="inline-block px-2 py-0.5 rounded bg-[#2A9D8F]/20 text-[#2A9D8F] text-[10px] font-bold uppercase tracking-wider mb-1">
+              {getCategoryLabel(analysis.category, lang)}
+            </span>
+            <h2 className="text-base sm:text-lg font-bold text-white truncate leading-tight">
+              {analysis.productName}
+            </h2>
+            <p className="text-xs text-slate-400 mt-0.5">
+              {lang === 'ar' ? 'السعر المقترح:' : 'Prix envisagé :'}{' '}
+              <strong className="text-white font-semibold">
+                <bdi className="font-sans" dir="ltr">{analysis.targetPriceDZD.toLocaleString()}</bdi> {t.dzd}
+              </strong>
+            </p>
           </div>
-        ) : (
-          <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl bg-[#0F1B1E] border border-[#233A3E] flex items-center justify-center text-[#D4A34A] shrink-0 font-serif font-bold text-xl">
-            DZ
+        </div>
+
+        {/* Multi-photo thumbnail strip if more than 1 photo was uploaded */}
+        {productPhotos.length > 1 && (
+          <div className="pt-2 border-t border-[#233A3E]/80 flex items-center gap-2 overflow-x-auto pb-1">
+            {productPhotos.map((pUrl, idx) => (
+              <button
+                key={`${pUrl}_${idx}`}
+                type="button"
+                onClick={() => setSelectedPhotoIdx(idx)}
+                className={`relative w-12 h-12 rounded-lg overflow-hidden shrink-0 border transition cursor-pointer ${
+                  selectedPhotoIdx === idx
+                    ? 'border-[#D4A34A] ring-1 ring-[#D4A34A]'
+                    : 'border-[#233A3E] opacity-70 hover:opacity-100'
+                }`}
+              >
+                <img
+                  src={pUrl}
+                  alt={`${analysis.productName} ${idx + 1}`}
+                  referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    (e.currentTarget as HTMLImageElement).src = '/icon-512.png';
+                  }}
+                  className="w-full h-full object-cover"
+                />
+              </button>
+            ))}
           </div>
         )}
-
-        <div className="flex-1 min-w-0">
-          <span className="inline-block px-2 py-0.5 rounded bg-[#2A9D8F]/20 text-[#2A9D8F] text-[10px] font-bold uppercase tracking-wider mb-1">
-            {getCategoryLabel(analysis.category, lang)}
-          </span>
-          <h2 className="text-base sm:text-lg font-bold text-white truncate leading-tight">
-            {analysis.productName}
-          </h2>
-          <p className="text-xs text-slate-400 mt-0.5">
-            {lang === 'ar' ? 'السعر المقترح:' : 'Prix envisagé :'}{' '}
-            <strong className="text-white font-semibold">
-              <bdi className="font-sans" dir="ltr">{analysis.targetPriceDZD.toLocaleString()}</bdi> {t.dzd}
-            </strong>
-          </p>
-        </div>
       </div>
 
       {/* Lightbox Modal for Photo Zoom */}
-      {isPhotoZoomed && analysis.photoUrl && (
+      {isPhotoZoomed && activePhotoUrl && (
         <div
           role="dialog"
           aria-modal="true"
@@ -191,7 +270,10 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
             className="relative max-w-lg w-full bg-[#152428] border border-[#233A3E] rounded-2xl overflow-hidden shadow-2xl p-2"
           >
             <div className="flex items-center justify-between px-3 py-2 border-b border-[#233A3E]">
-              <span className="text-xs font-bold text-white truncate">{analysis.productName}</span>
+              <span className="text-xs font-bold text-white truncate">
+                {analysis.productName}{' '}
+                {productPhotos.length > 1 ? `(${selectedPhotoIdx + 1}/${productPhotos.length})` : ''}
+              </span>
               <button
                 type="button"
                 onClick={() => setIsPhotoZoomed(false)}
@@ -201,17 +283,40 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <div className="p-2 flex items-center justify-center bg-[#0F1B1E] rounded-xl overflow-hidden max-h-[70vh]">
+            <div className="p-2 flex items-center justify-center bg-[#0F1B1E] rounded-xl overflow-hidden max-h-[65vh]">
               <img
-                src={analysis.photoUrl}
+                src={activePhotoUrl}
                 alt={analysis.productName}
                 referrerPolicy="no-referrer"
                 onError={(e) => {
                   (e.currentTarget as HTMLImageElement).src = '/icon-512.png';
                 }}
-                className="max-h-[68vh] w-auto object-contain rounded-lg shadow-lg"
+                className="max-h-[62vh] w-auto object-contain rounded-lg shadow-lg"
               />
             </div>
+            {productPhotos.length > 1 && (
+              <div className="flex items-center justify-center gap-2 pt-2 pb-1 overflow-x-auto">
+                {productPhotos.map((pUrl, idx) => (
+                  <button
+                    key={`zoom_${idx}`}
+                    type="button"
+                    onClick={() => setSelectedPhotoIdx(idx)}
+                    className={`w-12 h-12 rounded-lg overflow-hidden border transition cursor-pointer shrink-0 ${
+                      selectedPhotoIdx === idx
+                        ? 'border-[#D4A34A] ring-1 ring-[#D4A34A]'
+                        : 'border-[#233A3E] opacity-60 hover:opacity-100'
+                    }`}
+                  >
+                    <img
+                      src={pUrl}
+                      alt={`${analysis.productName} ${idx + 1}`}
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full object-cover"
+                    />
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -490,53 +595,28 @@ export const AnalysisResultView: React.FC<AnalysisResultViewProps> = ({
         <div className="flex flex-col sm:flex-row items-center gap-2.5">
           <button
             id="btn-preview-analysis-landing"
-            onClick={() => {
-              if (onOpenLandingPage) {
-                const isUuid = typeof analysis.id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(analysis.id);
-                onOpenLandingPage({
-                  id: isUuid ? analysis.id : '',
-                  analysisId: analysis.id,
-                  productName: analysis.productName,
-                  category: analysis.category,
-                  targetPriceDZD: analysis.targetPriceDZD,
-                  originalPriceDZD: Math.round(analysis.targetPriceDZD * 1.35),
-                  photoUrl: analysis.photoUrl,
-                  styleTheme: detectedTheme,
-                  style_theme: detectedTheme,
-                  accroches: analysis.accroches,
-                  conseil: localizedConseil,
-                  showPreviewBar: true,
-                });
-              }
-            }}
-            className="w-full sm:flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-[#D4A34A] to-[#AA7A28] hover:brightness-105 text-slate-950 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg transition cursor-pointer active:scale-95"
+            onClick={handlePreviewAnalysisLanding}
+            disabled={generatingLandingPage}
+            className="w-full sm:flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-[#D4A34A] to-[#AA7A28] hover:brightness-105 text-slate-950 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg transition cursor-pointer active:scale-95 disabled:opacity-75 disabled:cursor-wait"
           >
-            <Eye className="w-4 h-4" />
-            <span>{lang === 'ar' ? 'معاينة صفحة الهبوط الفاخرة' : 'Voir & Tester la Landing Page'}</span>
+            {generatingLandingPage ? (
+              <>
+                <Sparkles className="w-4 h-4 animate-spin" />
+                <span>{lang === 'ar' ? 'جاري تخصيص نصوص الصفحة والصور...' : 'Adaptation du texte au produit & photos...'}</span>
+              </>
+            ) : (
+              <>
+                <Eye className="w-4 h-4" />
+                <span>{lang === 'ar' ? 'معاينة صفحة الهبوط الفاخرة' : 'Voir & Tester la Landing Page'}</span>
+              </>
+            )}
           </button>
 
           <button
             id="btn-switch-themes-analysis-landing"
-            onClick={() => {
-              if (onOpenLandingPage) {
-                const isUuid = typeof analysis.id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(analysis.id);
-                onOpenLandingPage({
-                  id: isUuid ? analysis.id : '',
-                  analysisId: analysis.id,
-                  productName: analysis.productName,
-                  category: analysis.category,
-                  targetPriceDZD: analysis.targetPriceDZD,
-                  originalPriceDZD: Math.round(analysis.targetPriceDZD * 1.35),
-                  photoUrl: analysis.photoUrl,
-                  styleTheme: detectedTheme,
-                  style_theme: detectedTheme,
-                  accroches: analysis.accroches,
-                  conseil: localizedConseil,
-                  showPreviewBar: true,
-                });
-              }
-            }}
-            className="w-full sm:w-auto py-2.5 px-3 rounded-xl bg-[#0F1B1E] hover:bg-[#152428] border border-[#233A3E] hover:border-[#D4A34A]/50 text-slate-300 hover:text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer"
+            onClick={handlePreviewAnalysisLanding}
+            disabled={generatingLandingPage}
+            className="w-full sm:w-auto py-2.5 px-3 rounded-xl bg-[#0F1B1E] hover:bg-[#152428] border border-[#233A3E] hover:border-[#D4A34A]/50 text-slate-300 hover:text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer disabled:opacity-75"
             title={lang === 'ar' ? 'استعراض الثيمات الـ 6 لمنتجك' : 'Tester les 6 thèmes visuels sur votre produit'}
           >
             <Layers className="w-3.5 h-3.5 text-[#D4A34A]" />
